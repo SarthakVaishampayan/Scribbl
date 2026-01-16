@@ -1,0 +1,13 @@
+{
+  "name": "collaborative-canvas",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "server": "nodemon server/server.js",
+    "client": "npm run dev --prefix src",
+    "dev": "concurrently \"npm run server\" \"npm run client\""
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.0"
+  }
+}
