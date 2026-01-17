@@ -1,4 +1,4 @@
-// src/src/App.jsx - COMPLETE (Step 5)
+// D:\project\collaborative canvas\src\src\App.jsx
 import React, { useState } from 'react';
 import CanvasBoard from './components/CanvasBoard';
 import './App.css';
@@ -7,9 +7,15 @@ function App() {
   const [currentTool, setCurrentTool] = useState('brush');
   const [currentColor, setCurrentColor] = useState('#000000');
   const [strokeWidth, setStrokeWidth] = useState(5);
-
-  // Presence list comes from server via CanvasBoard callback
   const [users, setUsers] = useState([]);
+
+  // NEW: Auto-switch to brush when color is selected
+  const handleColorChange = (color) => {
+    setCurrentColor(color);
+    if (currentTool === 'eraser') {
+      setCurrentTool('brush'); // Auto-activate brush
+    }
+  };
 
   return (
     <div className="app">
@@ -42,26 +48,38 @@ function App() {
                 <button
                   className={`color-btn ${currentColor === '#000000' ? 'active' : ''}`}
                   style={{ background: '#000000' }}
-                  onClick={() => setCurrentColor('#000000')}
+                  onClick={() => handleColorChange('#000000')}
                   title="Black"
                 />
                 <button
                   className={`color-btn ${currentColor === '#ff0000' ? 'active' : ''}`}
                   style={{ background: '#ff0000' }}
-                  onClick={() => setCurrentColor('#ff0000')}
+                  onClick={() => handleColorChange('#ff0000')}
                   title="Red"
                 />
                 <button
                   className={`color-btn ${currentColor === '#00ff00' ? 'active' : ''}`}
                   style={{ background: '#00ff00' }}
-                  onClick={() => setCurrentColor('#00ff00')}
+                  onClick={() => handleColorChange('#00ff00')}
                   title="Green"
                 />
                 <button
                   className={`color-btn ${currentColor === '#0000ff' ? 'active' : ''}`}
                   style={{ background: '#0000ff' }}
-                  onClick={() => setCurrentColor('#0000ff')}
+                  onClick={() => handleColorChange('#0ff0ff')}
                   title="Blue"
+                />
+                <button
+                  className={`color-btn ${currentColor === '#ffff00' ? 'active' : ''}`}
+                  style={{ background: '#ffff00' }}
+                  onClick={() => handleColorChange('#ffff00')}
+                  title="Yellow"
+                />
+                <button
+                  className={`color-btn ${currentColor === '#ff00ff' ? 'active' : ''}`}
+                  style={{ background: '#ff00ff' }}
+                  onClick={() => handleColorChange('#ff00ff')}
+                  title="Magenta"
                 />
               </div>
 
