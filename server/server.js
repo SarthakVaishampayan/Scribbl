@@ -1,4 +1,4 @@
-// server/server.js - COMPLETE (Step 6)
+// D:\project\collaborative canvas\server\server.js
 const express = require("express");
 const http = require("http");
 const cors = require("cors");
@@ -48,9 +48,9 @@ function validateOperation(op) {
   if (typeof op.id !== "string" || !op.id) return false;
   if (!Array.isArray(op.points) || op.points.length < 2) return false;
 
-  if (typeof op.width !== "number" || !Number.isFinite(op.width) || op.width <= 0 || op.width > 100) return false;
+  if (typeof op.width !== "number" || !Number.isFinite(op.width) || op.width <= 0 || op.width > 100)
+    return false;
 
-  // color can be any string for brush; for eraser we still accept but ignore on client
   if (typeof op.color !== "string") return false;
 
   for (const p of op.points) {
@@ -59,7 +59,13 @@ function validateOperation(op) {
     const y = Number(p.y);
     if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
   }
+  return true;
+}
 
+// Live segments should be tiny (2 points per packet)
+function validateLive(op) {
+  if (!validateOperation(op)) return false;
+  if (op.points.length > 5) return false;
   return true;
 }
 
@@ -73,7 +79,7 @@ io.on("connection", (socket) => {
 
     socket.data.roomId = roomId;
 
-    const room = getOrCreateRoom(roomId);
+    getOrCreateRoom(roomId);
 
     const user = {
       id: socket.id,
@@ -86,6 +92,7 @@ io.on("connection", (socket) => {
     addUser(roomId, user);
     socket.join(roomId);
 
+    const room = getOrCreateRoom(roomId);
     socket.emit("canvasState", room.operations);
     io.to(roomId).emit("usersUpdate", listUsers(roomId));
   });
@@ -106,7 +113,20 @@ io.on("connection", (socket) => {
     });
   });
 
-  // NEW: receive completed strokes
+  // NEW: live segments during drawing (do NOT store)
+  socket.on("strokeLive", (liveOp) => {
+    const roomId = socket.data.roomId;
+    if (!roomId) return;
+
+    if (!validateLive(liveOp)) return;
+
+    socket.to(roomId).emit("strokeLive", {
+      userId: socket.id,
+      op: liveOp
+    });
+  });
+
+  // Final stroke (store + broadcast)
   socket.on("strokeEnd", (operation) => {
     const roomId = socket.data.roomId;
     if (!roomId) return;
@@ -115,7 +135,6 @@ io.on("connection", (socket) => {
 
     const room = getOrCreateRoom(roomId);
 
-    // Attach author
     const opToStore = {
       ...operation,
       userId: socket.id,
@@ -124,8 +143,10 @@ io.on("connection", (socket) => {
 
     addOperation(room, opToStore);
 
-    // Broadcast to everyone in room (including sender)
     io.to(roomId).emit("strokeCreated", opToStore);
+
+    // Tell everyone to clear that user's live overlay for this stroke
+    io.to(roomId).emit("strokeLiveEnd", { userId: socket.id, strokeId: operation.id });
   });
 
   socket.on("disconnect", () => {
@@ -133,6 +154,7 @@ io.on("connection", (socket) => {
     if (roomId) {
       removeUser(roomId, socket.id);
       io.to(roomId).emit("usersUpdate", listUsers(roomId));
+      io.to(roomId).emit("strokeLiveEnd", { userId: socket.id, strokeId: "*" });
     }
     console.log("Client disconnected", socket.id);
   });
