@@ -1,32 +1,52 @@
-// server/drawing-state.js
+// D:\project\collaborative canvas\server\drawing-state.js
+
+const MAX_OPS = 1500;
+
+function ensureRedoStack(room, userId) {
+  if (!room.redoStacks) room.redoStacks = new Map();
+  if (!room.redoStacks.has(userId)) room.redoStacks.set(userId, []);
+  return room.redoStacks.get(userId);
+}
 
 function addOperation(room, operation) {
   room.operations.push(operation);
-  room.undone = [];
+
+  // Standard behavior: new action clears redo for that user
+  if (operation.userId) {
+    const redo = ensureRedoStack(room, operation.userId);
+    redo.length = 0;
+  }
+
+  if (room.operations.length > MAX_OPS) {
+    room.operations.splice(0, room.operations.length - MAX_OPS);
+  }
 }
 
-function undo(room) {
-  if (!room.operations.length) return null;
-  const op = room.operations.pop();
-  room.undone.push(op);
-  return op;
+function undoLastByUser(room, userId) {
+  const redo = ensureRedoStack(room, userId);
+
+  for (let i = room.operations.length - 1; i >= 0; i--) {
+    const op = room.operations[i];
+    if (op.userId === userId) {
+      const [removed] = room.operations.splice(i, 1);
+      redo.push(removed);
+      return removed;
+    }
+  }
+  return null;
 }
 
-function redo(room) {
-  if (!room.undone.length) return null;
-  const op = room.undone.pop();
+function redoLastByUser(room, userId) {
+  const redo = ensureRedoStack(room, userId);
+  const op = redo.pop();
+  if (!op) return null;
+
   room.operations.push(op);
   return op;
 }
 
-function clear(room) {
-  room.operations = [];
-  room.undone = [];
-}
-
 module.exports = {
   addOperation,
-  undo,
-  redo,
-  clear
+  undoLastByUser,
+  redoLastByUser
 };

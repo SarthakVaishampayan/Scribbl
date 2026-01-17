@@ -1,5 +1,5 @@
 // D:\project\collaborative canvas\src\src\App.jsx
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import CanvasBoard from './components/CanvasBoard';
 import './App.css';
 
@@ -9,13 +9,36 @@ function App() {
   const [strokeWidth, setStrokeWidth] = useState(5);
   const [users, setUsers] = useState([]);
 
-  // NEW: Auto-switch to brush when color is selected
+  const canvasApiRef = useRef(null);
+
   const handleColorChange = (color) => {
     setCurrentColor(color);
-    if (currentTool === 'eraser') {
-      setCurrentTool('brush'); // Auto-activate brush
-    }
+    if (currentTool === 'eraser') setCurrentTool('brush');
   };
+
+  useEffect(() => {
+    const onKeyDown = (e) => {
+      const isMac = navigator.platform.toLowerCase().includes('mac');
+      const mod = isMac ? e.metaKey : e.ctrlKey;
+
+      if (!mod) return;
+
+      // Ctrl+Z / Cmd+Z
+      if (e.key.toLowerCase() === 'z' && !e.shiftKey) {
+        e.preventDefault();
+        canvasApiRef.current?.undo?.();
+      }
+
+      // Ctrl+Y OR Ctrl+Shift+Z (common redo combos)
+      if (e.key.toLowerCase() === 'y' || (e.key.toLowerCase() === 'z' && e.shiftKey)) {
+        e.preventDefault();
+        canvasApiRef.current?.redo?.();
+      }
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
 
   return (
     <div className="app">
@@ -66,20 +89,8 @@ function App() {
                 <button
                   className={`color-btn ${currentColor === '#0000ff' ? 'active' : ''}`}
                   style={{ background: '#0000ff' }}
-                  onClick={() => handleColorChange('#0ff0ff')}
+                  onClick={() => handleColorChange('#0000ff')}
                   title="Blue"
-                />
-                <button
-                  className={`color-btn ${currentColor === '#ffff00' ? 'active' : ''}`}
-                  style={{ background: '#ffff00' }}
-                  onClick={() => handleColorChange('#ffff00')}
-                  title="Yellow"
-                />
-                <button
-                  className={`color-btn ${currentColor === '#ff00ff' ? 'active' : ''}`}
-                  style={{ background: '#ff00ff' }}
-                  onClick={() => handleColorChange('#ff00ff')}
-                  title="Magenta"
                 />
               </div>
 
@@ -134,8 +145,12 @@ function App() {
           </div>
 
           <div className="controls">
-            <button className="control-btn" disabled>↶ Undo</button>
-            <button className="control-btn" disabled>↷ Redo</button>
+            <button className="control-btn" onClick={() => canvasApiRef.current?.undo?.()}>
+              ↶ Undo
+            </button>
+            <button className="control-btn" onClick={() => canvasApiRef.current?.redo?.()}>
+              ↷ Redo
+            </button>
             <button className="control-btn clear" disabled>🗑️ Clear</button>
           </div>
         </div>
@@ -146,6 +161,7 @@ function App() {
             currentColor={currentColor}
             strokeWidth={strokeWidth}
             onUsersUpdate={setUsers}
+            canvasApiRef={canvasApiRef}
           />
         </div>
       </div>

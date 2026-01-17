@@ -12,7 +12,7 @@ const {
   listUsers
 } = require("./rooms");
 
-const { addOperation } = require("./drawing-state");
+const { addOperation, undoLastByUser, redoLastByUser } = require("./drawing-state");
 
 const app = express();
 const server = http.createServer(app);
@@ -32,7 +32,6 @@ app.get("/", (req, res) => {
 
 function pickColor(input, socketId) {
   if (typeof input === "string" && input.trim()) return input.trim();
-
   let hash = 0;
   for (let i = 0; i < socketId.length; i++) hash = (hash * 31 + socketId.charCodeAt(i)) >>> 0;
   const hue = hash % 360;
@@ -62,7 +61,6 @@ function validateOperation(op) {
   return true;
 }
 
-// Live segments should be tiny (2 points per packet)
 function validateLive(op) {
   if (!validateOperation(op)) return false;
   if (op.points.length > 5) return false;
@@ -79,7 +77,7 @@ io.on("connection", (socket) => {
 
     socket.data.roomId = roomId;
 
-    getOrCreateRoom(roomId);
+    const room = getOrCreateRoom(roomId);
 
     const user = {
       id: socket.id,
@@ -92,7 +90,6 @@ io.on("connection", (socket) => {
     addUser(roomId, user);
     socket.join(roomId);
 
-    const room = getOrCreateRoom(roomId);
     socket.emit("canvasState", room.operations);
     io.to(roomId).emit("usersUpdate", listUsers(roomId));
   });
@@ -113,24 +110,17 @@ io.on("connection", (socket) => {
     });
   });
 
-  // NEW: live segments during drawing (do NOT store)
   socket.on("strokeLive", (liveOp) => {
     const roomId = socket.data.roomId;
     if (!roomId) return;
-
     if (!validateLive(liveOp)) return;
 
-    socket.to(roomId).emit("strokeLive", {
-      userId: socket.id,
-      op: liveOp
-    });
+    socket.to(roomId).emit("strokeLive", { userId: socket.id, op: liveOp });
   });
 
-  // Final stroke (store + broadcast)
   socket.on("strokeEnd", (operation) => {
     const roomId = socket.data.roomId;
     if (!roomId) return;
-
     if (!validateOperation(operation)) return;
 
     const room = getOrCreateRoom(roomId);
@@ -144,9 +134,31 @@ io.on("connection", (socket) => {
     addOperation(room, opToStore);
 
     io.to(roomId).emit("strokeCreated", opToStore);
-
-    // Tell everyone to clear that user's live overlay for this stroke
     io.to(roomId).emit("strokeLiveEnd", { userId: socket.id, strokeId: operation.id });
+  });
+
+  // STEP 9: Undo (per-user)
+  socket.on("undo", () => {
+    const roomId = socket.data.roomId;
+    if (!roomId) return;
+    const room = getOrCreateRoom(roomId);
+
+    const removed = undoLastByUser(room, socket.id);
+    if (!removed) return;
+
+    io.to(roomId).emit("canvasState", room.operations);
+  });
+
+  // STEP 9: Redo (per-user)
+  socket.on("redo", () => {
+    const roomId = socket.data.roomId;
+    if (!roomId) return;
+    const room = getOrCreateRoom(roomId);
+
+    const restored = redoLastByUser(room, socket.id);
+    if (!restored) return;
+
+    io.to(roomId).emit("canvasState", room.operations);
   });
 
   socket.on("disconnect", () => {

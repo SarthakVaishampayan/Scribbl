@@ -1,4 +1,3 @@
-/* eslint-disable react-hooks/refs */
 /* eslint-disable react-hooks/immutability */
 // D:\project\collaborative canvas\src\src\components\CanvasBoard.jsx
 import React, { useEffect, useRef, useCallback, useState, useMemo } from "react";
@@ -8,11 +7,11 @@ import { v4 as uuidv4 } from "uuid";
 const CANVAS_WIDTH = 1000;
 const CANVAS_HEIGHT = 600;
 
-const CURSOR_EMIT_MS = 16; // ~60fps
-const LIVE_EMIT_MS = 33;   // ~30fps
+const CURSOR_EMIT_MS = 16;
+const LIVE_EMIT_MS = 33;
 const MIN_DIST = 2.5;
 
-const CanvasBoard = ({ currentTool, currentColor, strokeWidth, onUsersUpdate }) => {
+const CanvasBoard = ({ currentTool, currentColor, strokeWidth, onUsersUpdate, canvasApiRef }) => {
   const baseCanvasRef = useRef(null);
   const liveCanvasRef = useRef(null);
 
@@ -37,7 +36,6 @@ const CanvasBoard = ({ currentTool, currentColor, strokeWidth, onUsersUpdate }) 
   const eraserCursor = useMemo(() => {
     const size = Math.max(strokeWidth * 2, 16);
     const halfSize = size / 2;
-
     const svg = `
       <svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">
         <circle cx="${halfSize}" cy="${halfSize}" r="${halfSize - 2}"
@@ -47,7 +45,6 @@ const CanvasBoard = ({ currentTool, currentColor, strokeWidth, onUsersUpdate }) 
           stroke-dasharray="4,2" />
       </svg>
     `;
-
     const encoded = encodeURIComponent(svg.trim());
     return `url("data:image/svg+xml,${encoded}") ${halfSize} ${halfSize}, auto`;
   }, [strokeWidth]);
@@ -64,7 +61,6 @@ const CanvasBoard = ({ currentTool, currentColor, strokeWidth, onUsersUpdate }) 
     if (!context || !op?.points || op.points.length < 2) return;
 
     context.save();
-
     context.lineCap = "round";
     context.lineJoin = "round";
     context.lineWidth = op.width || 5;
@@ -79,11 +75,8 @@ const CanvasBoard = ({ currentTool, currentColor, strokeWidth, onUsersUpdate }) 
 
     context.beginPath();
     context.moveTo(op.points[0].x, op.points[0].y);
-    for (let i = 1; i < op.points.length; i++) {
-      context.lineTo(op.points[i].x, op.points[i].y);
-    }
+    for (let i = 1; i < op.points.length; i++) context.lineTo(op.points[i].x, op.points[i].y);
     context.stroke();
-
     context.restore();
   }, []);
 
@@ -92,12 +85,8 @@ const CanvasBoard = ({ currentTool, currentColor, strokeWidth, onUsersUpdate }) 
     if (!liveCtx) return;
 
     liveCtx.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
-    
-    // Only draw brush strokes on overlay (erasers go to base canvas)
     for (const op of remoteLiveMapRef.current.values()) {
-      if (op.type !== "eraser") {
-        drawOperation(liveCtx, op);
-      }
+      if (op.type !== "eraser") drawOperation(liveCtx, op);
     }
   }, [drawOperation]);
 
@@ -125,12 +114,21 @@ const CanvasBoard = ({ currentTool, currentColor, strokeWidth, onUsersUpdate }) 
     liveCtxRef.current = liveCtx;
   }, []);
 
+  // Socket + register undo/redo API
   useEffect(() => {
     if (didInitSocketRef.current) return;
     didInitSocketRef.current = true;
 
     const socket = io("http://localhost:5000");
     socketRef.current = socket;
+
+    // Expose API to App.jsx buttons + shortcuts
+    if (canvasApiRef) {
+      canvasApiRef.current = {
+        undo: () => socket.emit("undo"),
+        redo: () => socket.emit("redo")
+      };
+    }
 
     socket.on("connect", () => {
       const randomName = `User-${socket.id.slice(0, 4)}`;
@@ -157,7 +155,6 @@ const CanvasBoard = ({ currentTool, currentColor, strokeWidth, onUsersUpdate }) 
       baseCtx.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
       baseCtx.fillStyle = "#ffffff";
       baseCtx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
-
       operations.forEach((op) => drawOperation(baseCtx, op));
 
       remoteLiveMapRef.current.clear();
@@ -175,36 +172,30 @@ const CanvasBoard = ({ currentTool, currentColor, strokeWidth, onUsersUpdate }) 
       redrawLiveOverlay();
     });
 
-    // UPDATED: Handle live strokes (brush on overlay, eraser on base)
     socket.on("strokeLive", ({ userId, op }) => {
       if (!userId || !op?.id) return;
       if (userId === socket.id) return;
 
-      const key = `${userId}:${op.id}`;
-      
       if (op.type === "eraser") {
-        // ERASER: Apply directly to base canvas (live preview)
         const baseCtx = baseCtxRef.current;
-        if (baseCtx) {
-          drawOperation(baseCtx, op);
-        }
-        // Don't store in map (no need to redraw on overlay)
-      } else {
-        // BRUSH: Store and draw on overlay
-        const existing = remoteLiveMapRef.current.get(key);
-
-        if (!existing) {
-          remoteLiveMapRef.current.set(key, { ...op, points: [...op.points] });
-        } else {
-          const last = existing.points[existing.points.length - 1];
-          const incoming = op.points || [];
-          const startIdx =
-            last && incoming[0] && last.x === incoming[0].x && last.y === incoming[0].y ? 1 : 0;
-          existing.points.push(...incoming.slice(startIdx));
-        }
-
-        redrawLiveOverlay();
+        if (baseCtx) drawOperation(baseCtx, op);
+        return;
       }
+
+      const key = `${userId}:${op.id}`;
+      const existing = remoteLiveMapRef.current.get(key);
+
+      if (!existing) {
+        remoteLiveMapRef.current.set(key, { ...op, points: [...op.points] });
+      } else {
+        const last = existing.points[existing.points.length - 1];
+        const incoming = op.points || [];
+        const startIdx =
+          last && incoming[0] && last.x === incoming[0].x && last.y === incoming[0].y ? 1 : 0;
+        existing.points.push(...incoming.slice(startIdx));
+      }
+
+      redrawLiveOverlay();
     });
 
     socket.on("strokeLiveEnd", ({ userId, strokeId }) => {
@@ -217,7 +208,6 @@ const CanvasBoard = ({ currentTool, currentColor, strokeWidth, onUsersUpdate }) 
       } else {
         remoteLiveMapRef.current.delete(`${userId}:${strokeId}`);
       }
-
       redrawLiveOverlay();
     });
 
@@ -225,8 +215,9 @@ const CanvasBoard = ({ currentTool, currentColor, strokeWidth, onUsersUpdate }) 
       socket.disconnect();
       socketRef.current = null;
       didInitSocketRef.current = false;
+      if (canvasApiRef) canvasApiRef.current = null;
     };
-  }, [drawOperation, redrawLiveOverlay, onUsersUpdate]);
+  }, [drawOperation, redrawLiveOverlay, onUsersUpdate, canvasApiRef]);
 
   const emitCursorThrottled = useCallback((x, y) => {
     const now = Date.now();
@@ -255,8 +246,6 @@ const CanvasBoard = ({ currentTool, currentColor, strokeWidth, onUsersUpdate }) 
       lastPointRef.current = pos;
 
       ctx.lineWidth = strokeWidth;
-      ctx.lineCap = "round";
-      ctx.lineJoin = "round";
 
       if (currentTool === "brush") {
         ctx.globalCompositeOperation = "source-over";
@@ -281,7 +270,6 @@ const CanvasBoard = ({ currentTool, currentColor, strokeWidth, onUsersUpdate }) 
       if (!ctx) return;
 
       const pos = getMousePos(e);
-
       if (!shouldAddPoint(pos)) {
         emitCursorThrottled(pos.x, pos.y);
         return;
@@ -295,13 +283,12 @@ const CanvasBoard = ({ currentTool, currentColor, strokeWidth, onUsersUpdate }) 
       ctx.lineTo(pos.x, pos.y);
       ctx.stroke();
 
-      // Live segment emit (works for BOTH brush and eraser now)
       const now = Date.now();
       if (prev && now - lastLiveEmitRef.current >= LIVE_EMIT_MS) {
         lastLiveEmitRef.current = now;
         socketRef.current?.emit("strokeLive", {
           id: strokeIdRef.current,
-          type: currentTool,      // "brush" or "eraser"
+          type: currentTool,
           color: currentColor,
           width: strokeWidth,
           points: [prev, pos]
