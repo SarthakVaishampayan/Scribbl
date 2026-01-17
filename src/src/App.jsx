@@ -20,16 +20,13 @@ function App() {
     const onKeyDown = (e) => {
       const isMac = navigator.platform.toLowerCase().includes('mac');
       const mod = isMac ? e.metaKey : e.ctrlKey;
-
       if (!mod) return;
 
-      // Ctrl+Z / Cmd+Z
       if (e.key.toLowerCase() === 'z' && !e.shiftKey) {
         e.preventDefault();
         canvasApiRef.current?.undo?.();
       }
 
-      // Ctrl+Y OR Ctrl+Shift+Z (common redo combos)
       if (e.key.toLowerCase() === 'y' || (e.key.toLowerCase() === 'z' && e.shiftKey)) {
         e.preventDefault();
         canvasApiRef.current?.redo?.();
@@ -39,6 +36,12 @@ function App() {
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
+
+  const handleClearMine = () => {
+    const ok = window.confirm('Clear only YOUR strokes? (Other users remain unchanged)');
+    if (!ok) return;
+    canvasApiRef.current?.clearMine?.();
+  };
 
   return (
     <div className="app">
@@ -50,6 +53,7 @@ function App() {
         <div className="sidebar">
           <div className="tool-panel">
             <h3>Tools</h3>
+
             <div className="tool-group">
               <button
                 className={`tool-btn ${currentTool === 'brush' ? 'active' : ''}`}
@@ -145,13 +149,9 @@ function App() {
           </div>
 
           <div className="controls">
-            <button className="control-btn" onClick={() => canvasApiRef.current?.undo?.()}>
-              ↶ Undo
-            </button>
-            <button className="control-btn" onClick={() => canvasApiRef.current?.redo?.()}>
-              ↷ Redo
-            </button>
-            <button className="control-btn clear" disabled>🗑️ Clear</button>
+            <button className="control-btn" onClick={() => canvasApiRef.current?.undo?.()}>↶ Undo</button>
+            <button className="control-btn" onClick={() => canvasApiRef.current?.redo?.()}>↷ Redo</button>
+            <button className="control-btn clear" onClick={handleClearMine}>🗑️ Clear Mine</button>
           </div>
         </div>
 

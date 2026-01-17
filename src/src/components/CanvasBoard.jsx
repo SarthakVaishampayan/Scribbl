@@ -114,7 +114,6 @@ const CanvasBoard = ({ currentTool, currentColor, strokeWidth, onUsersUpdate, ca
     liveCtxRef.current = liveCtx;
   }, []);
 
-  // Socket + register undo/redo API
   useEffect(() => {
     if (didInitSocketRef.current) return;
     didInitSocketRef.current = true;
@@ -122,11 +121,12 @@ const CanvasBoard = ({ currentTool, currentColor, strokeWidth, onUsersUpdate, ca
     const socket = io("http://localhost:5000");
     socketRef.current = socket;
 
-    // Expose API to App.jsx buttons + shortcuts
+    // Expose API to App.jsx
     if (canvasApiRef) {
       canvasApiRef.current = {
         undo: () => socket.emit("undo"),
-        redo: () => socket.emit("redo")
+        redo: () => socket.emit("redo"),
+        clearMine: () => socket.emit("clearMine")
       };
     }
 
@@ -257,7 +257,6 @@ const CanvasBoard = ({ currentTool, currentColor, strokeWidth, onUsersUpdate, ca
 
       ctx.beginPath();
       ctx.moveTo(pos.x, pos.y);
-
       emitCursorThrottled(pos.x, pos.y);
     },
     [getMousePos, currentTool, currentColor, strokeWidth, emitCursorThrottled]
@@ -362,12 +361,7 @@ const CanvasBoard = ({ currentTool, currentColor, strokeWidth, onUsersUpdate, ca
 
       <canvas
         ref={liveCanvasRef}
-        style={{
-          position: "absolute",
-          left: 0,
-          top: 0,
-          pointerEvents: "none"
-        }}
+        style={{ position: "absolute", left: 0, top: 0, pointerEvents: "none" }}
       />
 
       <div className="cursor-overlay">

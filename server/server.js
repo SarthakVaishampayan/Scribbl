@@ -12,7 +12,12 @@ const {
   listUsers
 } = require("./rooms");
 
-const { addOperation, undoLastByUser, redoLastByUser } = require("./drawing-state");
+const {
+  addOperation,
+  undoLastByUser,
+  redoLastByUser,
+  clearAllByUser
+} = require("./drawing-state");
 
 const app = express();
 const server = http.createServer(app);
@@ -137,7 +142,7 @@ io.on("connection", (socket) => {
     io.to(roomId).emit("strokeLiveEnd", { userId: socket.id, strokeId: operation.id });
   });
 
-  // STEP 9: Undo (per-user)
+  // Step 9
   socket.on("undo", () => {
     const roomId = socket.data.roomId;
     if (!roomId) return;
@@ -149,7 +154,6 @@ io.on("connection", (socket) => {
     io.to(roomId).emit("canvasState", room.operations);
   });
 
-  // STEP 9: Redo (per-user)
   socket.on("redo", () => {
     const roomId = socket.data.roomId;
     if (!roomId) return;
@@ -158,6 +162,19 @@ io.on("connection", (socket) => {
     const restored = redoLastByUser(room, socket.id);
     if (!restored) return;
 
+    io.to(roomId).emit("canvasState", room.operations);
+  });
+
+  // STEP 10: Clear only MY strokes
+  socket.on("clearMine", () => {
+    const roomId = socket.data.roomId;
+    if (!roomId) return;
+    const room = getOrCreateRoom(roomId);
+
+    clearAllByUser(room, socket.id);
+
+    // Clear any live overlay from this user and broadcast the rebuilt state
+    io.to(roomId).emit("strokeLiveEnd", { userId: socket.id, strokeId: "*" });
     io.to(roomId).emit("canvasState", room.operations);
   });
 
