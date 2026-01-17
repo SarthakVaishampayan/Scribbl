@@ -1,23 +1,11 @@
-// D:\project\collaborative canvas\server\server.js
+// server/server.js
 const express = require("express");
 const http = require("http");
 const cors = require("cors");
 const { Server } = require("socket.io");
 
-const {
-  getOrCreateRoom,
-  addUser,
-  removeUser,
-  updateCursor,
-  listUsers
-} = require("./rooms");
-
-const {
-  addOperation,
-  undoLastByUser,
-  redoLastByUser,
-  clearMyBrushStrokes
-} = require("./drawing-state");
+const { getOrCreateRoom, getRoom, removeUserFromRoom } = require("./rooms");
+const { addOperation, undo, redo, clear } = require("./drawing-state");
 
 const app = express();
 const server = http.createServer(app);
@@ -28,9 +16,7 @@ const io = new Server(server, {
   cors: { origin: "http://localhost:5173", methods: ["GET", "POST"] }
 });
 
-app.get("/", (req, res) => {
-  res.send("Realtime Collaborative Canvas Backend");
-});
+app.get("/", (req, res) => res.send("Realtime Collaborative Canvas Backend"));
 
 function pickColor(input, socketId) {
   if (typeof input === "string" && input.trim()) return input.trim();
@@ -40,63 +26,92 @@ function pickColor(input, socketId) {
   return `hsl(${hue} 85% 55%)`;
 }
 
+function safeRoomId(roomId) {
+  const id = (roomId || "").toString().trim();
+  if (!id) return "lobby";
+  return id.replace(/\s+/g, "-").slice(0, 40);
+}
+
+function safeName(name) {
+  const n = (name || "User").toString().trim();
+  return (n || "User").slice(0, 20);
+}
+
 function validateOperation(op) {
   if (!op || typeof op !== "object") return false;
-
-  const okType = op.type === "brush" || op.type === "eraser";
-  if (!okType) return false;
-
+  if (op.type !== "brush" && op.type !== "eraser") return false;
   if (typeof op.id !== "string" || !op.id) return false;
-  if (!Array.isArray(op.points) || op.points.length < 2) return false;
-
-  if (typeof op.width !== "number" || !Number.isFinite(op.width) || op.width <= 0 || op.width > 100)
-    return false;
-
+  if (!Array.isArray(op.points) || op.points.length < 1) return false;
+  if (typeof op.width !== "number" || !Number.isFinite(op.width) || op.width <= 0 || op.width > 100) return false;
   if (typeof op.color !== "string") return false;
 
   for (const p of op.points) {
-    if (!p) return false;
-    const x = Number(p.x);
-    const y = Number(p.y);
+    const x = Number(p?.x);
+    const y = Number(p?.y);
     if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
   }
   return true;
 }
 
-function validateLive(op) {
-  if (!validateOperation(op)) return false;
-  if (op.points.length > 5) return false;
-  return true;
+function getPlayers(roomId) {
+  const room = getRoom(roomId);
+  if (!room) return [];
+  return Array.from(room.users.values()).map((u) => ({
+    id: u.id,
+    name: u.name,
+    color: u.color,
+    cursor: u.cursor || null
+  }));
+}
+
+function broadcastPlayers(roomId) {
+  io.to(roomId).emit("room:players", { roomId, players: getPlayers(roomId) });
+}
+
+function leaveCurrentRoom(socket) {
+  const currentRoomId = socket.data.roomId;
+  if (!currentRoomId) return;
+
+  removeUserFromRoom(currentRoomId, socket.id);
+  socket.leave(currentRoomId);
+  socket.data.roomId = null;
+
+  broadcastPlayers(currentRoomId);
 }
 
 io.on("connection", (socket) => {
-  console.log("New client connected", socket.id);
+  console.log("client connected", socket.id);
 
-  socket.on("joinRoom", (payload) => {
-    const roomId = payload?.roomId || "default";
-    const userName = (payload?.userName || "User").toString().slice(0, 20);
+  socket.on("room:join", (payload) => {
+    const roomId = safeRoomId(payload?.roomId);
+    const name = safeName(payload?.userName);
     const color = pickColor(payload?.color, socket.id);
 
-    socket.data.roomId = roomId;
+    leaveCurrentRoom(socket);
 
     const room = getOrCreateRoom(roomId);
-
-    const user = {
+    room.users.set(socket.id, {
       id: socket.id,
-      name: userName,
+      name,
       color,
       cursor: null,
       joinedAt: Date.now()
-    };
+    });
 
-    addUser(roomId, user);
+    socket.data.roomId = roomId;
     socket.join(roomId);
 
-    socket.emit("canvasState", room.operations);
-    io.to(roomId).emit("usersUpdate", listUsers(roomId));
+    socket.emit("canvas:state", { roomId, operations: room.operations });
+    broadcastPlayers(roomId);
+
+    console.log(`socket ${socket.id} joined room ${roomId}`);
   });
 
-  socket.on("cursorMove", (payload) => {
+  socket.on("room:leave", () => {
+    leaveCurrentRoom(socket);
+  });
+
+  socket.on("cursor:move", (payload) => {
     const roomId = socket.data.roomId;
     if (!roomId) return;
 
@@ -104,87 +119,108 @@ io.on("connection", (socket) => {
     const y = Number(payload?.y);
     if (!Number.isFinite(x) || !Number.isFinite(y)) return;
 
-    updateCursor(roomId, socket.id, { x, y });
+    const room = getRoom(roomId);
+    if (!room) return;
 
-    socket.to(roomId).emit("cursorUpdate", {
-      userId: socket.id,
-      cursor: { x, y }
-    });
+    const u = room.users.get(socket.id);
+    if (!u) return;
+
+    u.cursor = { x, y };
+    room.users.set(socket.id, u);
+
+    socket.to(roomId).emit("cursor:update", { userId: socket.id, cursor: { x, y } });
   });
 
-  socket.on("strokeLive", (liveOp) => {
+  // Live stroke previews (not stored)
+  socket.on("stroke:update", (operation) => {
     const roomId = socket.data.roomId;
-    if (!roomId) return;
-    if (!validateLive(liveOp)) return;
+    if (!roomId || roomId === "lobby") return;
+    if (!validateOperation(operation)) return;
 
-    socket.to(roomId).emit("strokeLive", { userId: socket.id, op: liveOp });
+    socket.to(roomId).emit("stroke:update", { operation });
   });
 
-  socket.on("strokeEnd", (operation) => {
+  // Stroke finished: store in history with userId
+  socket.on("stroke:end", (operation) => {
     const roomId = socket.data.roomId;
-    if (!roomId) return;
+    if (!roomId || roomId === "lobby") return;
+
     if (!validateOperation(operation)) return;
 
     const room = getOrCreateRoom(roomId);
-
-    const opToStore = {
-      ...operation,
-      userId: socket.id,
-      timestamp: Date.now()
-    };
+    const opToStore = { ...operation, userId: socket.id, timestamp: Date.now() };
 
     addOperation(room, opToStore);
-
-    io.to(roomId).emit("strokeCreated", opToStore);
-    io.to(roomId).emit("strokeLiveEnd", { userId: socket.id, strokeId: operation.id });
+    io.to(roomId).emit("stroke:created", { roomId, operation: opToStore });
   });
 
-  socket.on("undo", () => {
+  // Per-user undo: remove last op created by this user
+  socket.on("canvas:undo", () => {
     const roomId = socket.data.roomId;
-    if (!roomId) return;
-    const room = getOrCreateRoom(roomId);
+    const userId = socket.id;
+    if (!roomId || roomId === "lobby") return;
 
-    const removed = undoLastByUser(room, socket.id);
-    if (!removed) return;
+    const room = getRoom(roomId);
+    if (!room) return;
 
-    io.to(roomId).emit("canvasState", room.operations);
+    const undoneOp = undo(room, userId);
+    if (undoneOp) {
+      io.to(roomId).emit("canvas:state", { roomId, operations: room.operations });
+    }
   });
 
-  socket.on("redo", () => {
+  // Per-user redo: restore last undone op of this user
+  socket.on("canvas:redo", () => {
     const roomId = socket.data.roomId;
-    if (!roomId) return;
-    const room = getOrCreateRoom(roomId);
+    const userId = socket.id;
+    if (!roomId || roomId === "lobby") return;
 
-    const restored = redoLastByUser(room, socket.id);
-    if (!restored) return;
+    const room = getRoom(roomId);
+    if (!room) return;
 
-    io.to(roomId).emit("canvasState", room.operations);
+    const redoneOp = redo(room, userId);
+    if (redoneOp) {
+      io.to(roomId).emit("canvas:state", { roomId, operations: room.operations });
+    }
   });
 
-  // STEP 10 (fixed): Clear only MY brush strokes (keep eraser ops)
-  socket.on("clearMine", () => {
+  // Clear mine: remove ONLY this user's brush strokes, keep all erasers
+  socket.on("canvas:clearMine", () => {
     const roomId = socket.data.roomId;
-    if (!roomId) return;
-    const room = getOrCreateRoom(roomId);
+    const userId = socket.id;
+    if (!roomId || roomId === "lobby") return;
 
-    clearMyBrushStrokes(room, socket.id);
+    const room = getRoom(roomId);
+    if (!room) return;
 
-    io.to(roomId).emit("strokeLiveEnd", { userId: socket.id, strokeId: "*" });
-    io.to(roomId).emit("canvasState", room.operations);
+    room.operations = room.operations.filter(
+      (op) => !(op.userId === userId && op.type === "brush")
+    );
+
+    if (room.undoneByUser && room.undoneByUser.has(userId)) {
+      room.undoneByUser.set(userId, []);
+    }
+
+    io.to(roomId).emit("canvas:state", { roomId, operations: room.operations });
+  });
+
+  // Optional global clear (kept for reference, not used by UI)
+  socket.on("canvas:clear", () => {
+    const roomId = socket.data.roomId;
+    if (!roomId || roomId === "lobby") return;
+
+    const room = getRoom(roomId);
+    if (!room) return;
+
+    clear(room);
+    io.to(roomId).emit("canvas:state", { roomId, operations: [] });
   });
 
   socket.on("disconnect", () => {
-    const roomId = socket.data.roomId;
-    if (roomId) {
-      removeUser(roomId, socket.id);
-      io.to(roomId).emit("usersUpdate", listUsers(roomId));
-      io.to(roomId).emit("strokeLiveEnd", { userId: socket.id, strokeId: "*" });
-    }
-    console.log("Client disconnected", socket.id);
+    leaveCurrentRoom(socket);
+    console.log("client disconnected", socket.id);
   });
 });
 
 const PORT = process.env.PORT || 5000;
-server.listen(PORT, () => {
-  console.log(`Server listening on http://localhost:${PORT}`);
-});
+server.listen(PORT, () => console.log(`Server listening on http://localhost:${PORT}`));

@@ -1,45 +1,53 @@
-// D:\project\collaborative canvas\server\rooms.js
+// server/rooms.js
 const rooms = new Map();
 
-const getOrCreateRoom = (roomId) => {
-  if (!rooms.has(roomId)) {
-    rooms.set(roomId, {
-      users: new Map(),
-      operations: [],
-      redoStacks: new Map() // userId -> [op, op, ...]
-    });
-  }
+/**
+ * Room shape:
+ * {
+ *   id: string,
+ *   users: Map<socketId, { id, name, color, cursor, joinedAt }>,
+ *   operations: Array<any>,
+ *   // per-user undo stacks:
+ *   undoneByUser: Map<userId, Array<any>>
+ * }
+ */
+
+function createRoom(roomId) {
+  return {
+    id: roomId,
+    users: new Map(),
+    operations: [],
+    undoneByUser: new Map()
+  };
+}
+
+function getOrCreateRoom(roomId) {
+  const id = (roomId || "lobby").toString();
+  if (!rooms.has(id)) rooms.set(id, createRoom(id));
+  return rooms.get(id);
+}
+
+function getRoom(roomId) {
   return rooms.get(roomId);
-};
+}
 
-const addUser = (roomId, user) => {
-  const room = getOrCreateRoom(roomId);
-  room.users.set(user.id, user);
-  if (!room.redoStacks.has(user.id)) room.redoStacks.set(user.id, []);
-};
+function removeUserFromRoom(roomId, socketId) {
+  const room = rooms.get(roomId);
+  if (!room) return;
 
-const removeUser = (roomId, userId) => {
-  const room = getOrCreateRoom(roomId);
-  room.users.delete(userId);
-  // keeping redo stack is fine; optional cleanup:
-  // room.redoStacks.delete(userId);
-};
+  room.users.delete(socketId);
+  if (room.undoneByUser) {
+    room.undoneByUser.delete(socketId);
+  }
 
-const updateCursor = (roomId, userId, cursor) => {
-  const room = getOrCreateRoom(roomId);
-  const user = room.users.get(userId);
-  if (user) user.cursor = cursor;
-};
-
-const listUsers = (roomId) => {
-  const room = getOrCreateRoom(roomId);
-  return Array.from(room.users.values());
-};
+  // If no users left, drop room to free memory
+  if (room.users.size === 0 && roomId !== "lobby") {
+    rooms.delete(roomId);
+  }
+}
 
 module.exports = {
   getOrCreateRoom,
-  addUser,
-  removeUser,
-  updateCursor,
-  listUsers
+  getRoom,
+  removeUserFromRoom
 };

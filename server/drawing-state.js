@@ -1,73 +1,71 @@
-// D:\project\collaborative canvas\server\drawing-state.js
+// server/drawing-state.js
 
-const MAX_OPS = 1500;
-
-function ensureRedoStack(room, userId) {
-  if (!room.redoStacks) room.redoStacks = new Map();
-  if (!room.redoStacks.has(userId)) room.redoStacks.set(userId, []);
-  return room.redoStacks.get(userId);
+// Ensure per-user undo map exists
+function ensureUndoneMap(room) {
+  if (!room.undoneByUser) {
+    room.undoneByUser = new Map();
+  }
 }
 
+// Add new operation and reset that user's redo stack
 function addOperation(room, operation) {
   room.operations.push(operation);
-
-  // New action clears redo for that user
-  if (operation.userId) {
-    const redo = ensureRedoStack(room, operation.userId);
-    redo.length = 0;
+  ensureUndoneMap(room);
+  const userId = operation.userId;
+  if (!room.undoneByUser.has(userId)) {
+    room.undoneByUser.set(userId, []);
   }
-
-  if (room.operations.length > MAX_OPS) {
-    room.operations.splice(0, room.operations.length - MAX_OPS);
-  }
+  // Clear that user's redo stack when they draw something new
+  room.undoneByUser.set(userId, []);
 }
 
-function undoLastByUser(room, userId) {
-  const redo = ensureRedoStack(room, userId);
+// Per-user undo: remove last operation by this user
+function undo(room, userId) {
+  if (!room.operations.length) return null;
+  ensureUndoneMap(room);
 
+  // Find last operation authored by this user, starting from end
+  let idx = -1;
   for (let i = room.operations.length - 1; i >= 0; i--) {
-    const op = room.operations[i];
-    if (op.userId === userId) {
-      const [removed] = room.operations.splice(i, 1);
-      redo.push(removed);
-      return removed;
+    if (room.operations[i].userId === userId) {
+      idx = i;
+      break;
     }
   }
-  return null;
+  if (idx === -1) return null;
+
+  const [op] = room.operations.splice(idx, 1);
+
+  if (!room.undoneByUser.has(userId)) {
+    room.undoneByUser.set(userId, []);
+  }
+  const stack = room.undoneByUser.get(userId);
+  stack.push(op);
+  room.undoneByUser.set(userId, stack);
+
+  return op;
 }
 
-function redoLastByUser(room, userId) {
-  const redo = ensureRedoStack(room, userId);
-  const op = redo.pop();
-  if (!op) return null;
+// Per-user redo: restore last undone op of this user
+function redo(room, userId) {
+  ensureUndoneMap(room);
+  const stack = room.undoneByUser.get(userId);
+  if (!stack || !stack.length) return null;
 
+  const op = stack.pop();
   room.operations.push(op);
   return op;
 }
 
-/**
- * STEP 10 (adjusted):
- * Clear ONLY my brush strokes.
- * Keep my eraser ops so erased parts stay erased after replay.
- */
-function clearMyBrushStrokes(room, userId) {
-  const before = room.operations.length;
-
-  room.operations = room.operations.filter(
-    (op) => !(op.userId === userId && op.type === "brush")
-  );
-
-  // Also remove brush ops from redo stack so user can't "redo" cleared drawings
-  const redo = ensureRedoStack(room, userId);
-  const kept = redo.filter((op) => op.type !== "brush");
-  redo.splice(0, redo.length, ...kept);
-
-  return before - room.operations.length;
+// Global clear (unused by "clear mine", but kept for completeness)
+function clear(room) {
+  room.operations = [];
+  room.undoneByUser = new Map();
 }
 
 module.exports = {
   addOperation,
-  undoLastByUser,
-  redoLastByUser,
-  clearMyBrushStrokes
+  undo,
+  redo,
+  clear
 };

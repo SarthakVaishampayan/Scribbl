@@ -1,391 +1,294 @@
 /* eslint-disable react-hooks/immutability */
-// D:\project\collaborative canvas\src\src\components\CanvasBoard.jsx
-import React, { useEffect, useRef, useCallback, useState, useMemo } from "react";
+// src/src/components/CanvasBoard.jsx
+import React, {
+  useEffect,
+  useRef,
+  useCallback,
+  useState,
+  useMemo,
+  forwardRef,
+  useImperativeHandle
+} from "react";
 import io from "socket.io-client";
 import { v4 as uuidv4 } from "uuid";
 
-const CANVAS_WIDTH = 1000;
-const CANVAS_HEIGHT = 600;
+const SOCKET_URL = "http://localhost:5000";
 
-const CURSOR_EMIT_MS = 16;
-const LIVE_EMIT_MS = 33;
-const MIN_DIST = 2.5;
+const CanvasBoard = forwardRef(
+  ({ roomId, userName, currentTool, currentColor, strokeWidth, onPlayersUpdate }, ref) => {
+    const canvasRef = useRef(null);
+    const socketRef = useRef(null);
 
-const CanvasBoard = ({ currentTool, currentColor, strokeWidth, onUsersUpdate, canvasApiRef }) => {
-  const baseCanvasRef = useRef(null);
-  const liveCanvasRef = useRef(null);
+    const [ctx, setCtx] = useState(null);
+    const [isDrawing, setIsDrawing] = useState(false);
+    const [currentPoints, setCurrentPoints] = useState([]);
+    const [currentStrokeId, setCurrentStrokeId] = useState(null);
+    const [players, setPlayers] = useState([]);
 
-  const baseCtxRef = useRef(null);
-  const liveCtxRef = useRef(null);
+    const CANVAS_WIDTH = 1000;
+    const CANVAS_HEIGHT = 600;
 
-  const socketRef = useRef(null);
-  const didInitSocketRef = useRef(false);
+    const eraserCursor = useMemo(() => {
+      const size = Math.max(strokeWidth * 2, 16);
+      const half = size / 2;
 
-  const [users, setUsers] = useState([]);
-  const [isDrawing, setIsDrawing] = useState(false);
+      const svg = `
+        <svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">
+          <circle cx="${half}" cy="${half}" r="${half - 2}"
+            fill="rgba(255,255,255,0.45)"
+            stroke="%23000000"
+            stroke-width="2"
+            stroke-dasharray="4,2" />
+        </svg>
+      `;
+      const encoded = encodeURIComponent(svg.trim());
+      return `url("data:image/svg+xml,${encoded}") ${half} ${half}, auto`;
+    }, [strokeWidth]);
 
-  const strokeIdRef = useRef(null);
-  const pointsRef = useRef([]);
-  const lastPointRef = useRef(null);
-
-  const lastCursorEmitRef = useRef(0);
-  const lastLiveEmitRef = useRef(0);
-
-  const remoteLiveMapRef = useRef(new Map());
-
-  const eraserCursor = useMemo(() => {
-    const size = Math.max(strokeWidth * 2, 16);
-    const halfSize = size / 2;
-    const svg = `
-      <svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">
-        <circle cx="${halfSize}" cy="${halfSize}" r="${halfSize - 2}"
-          fill="rgba(255,255,255,0.45)"
-          stroke="%23ff4444"
-          stroke-width="2"
-          stroke-dasharray="4,2" />
-      </svg>
-    `;
-    const encoded = encodeURIComponent(svg.trim());
-    return `url("data:image/svg+xml,${encoded}") ${halfSize} ${halfSize}, auto`;
-  }, [strokeWidth]);
-
-  const getMousePos = useCallback((e) => {
-    const rect = baseCanvasRef.current.getBoundingClientRect();
-    return {
-      x: ((e.clientX - rect.left) * CANVAS_WIDTH) / rect.width,
-      y: ((e.clientY - rect.top) * CANVAS_HEIGHT) / rect.height
-    };
-  }, []);
-
-  const drawOperation = useCallback((context, op) => {
-    if (!context || !op?.points || op.points.length < 2) return;
-
-    context.save();
-    context.lineCap = "round";
-    context.lineJoin = "round";
-    context.lineWidth = op.width || 5;
-
-    if (op.type === "eraser") {
-      context.globalCompositeOperation = "destination-out";
-      context.strokeStyle = "#ffffff";
-    } else {
+    const clearCanvas = useCallback((context) => {
+      if (!context) return;
+      context.save();
       context.globalCompositeOperation = "source-over";
-      context.strokeStyle = op.color || "#000000";
-    }
+      context.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+      context.fillStyle = "#ffffff";
+      context.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+      context.restore();
+    }, []);
 
-    context.beginPath();
-    context.moveTo(op.points[0].x, op.points[0].y);
-    for (let i = 1; i < op.points.length; i++) context.lineTo(op.points[i].x, op.points[i].y);
-    context.stroke();
-    context.restore();
-  }, []);
+    const drawOperation = useCallback((context, op) => {
+      if (!context || !op?.points || op.points.length < 2) return;
 
-  const redrawLiveOverlay = useCallback(() => {
-    const liveCtx = liveCtxRef.current;
-    if (!liveCtx) return;
-
-    liveCtx.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
-    for (const op of remoteLiveMapRef.current.values()) {
-      if (op.type !== "eraser") drawOperation(liveCtx, op);
-    }
-  }, [drawOperation]);
-
-  useEffect(() => {
-    const base = baseCanvasRef.current;
-    const live = liveCanvasRef.current;
-    if (!base || !live) return;
-
-    base.width = CANVAS_WIDTH;
-    base.height = CANVAS_HEIGHT;
-    live.width = CANVAS_WIDTH;
-    live.height = CANVAS_HEIGHT;
-
-    const baseCtx = base.getContext("2d");
-    baseCtx.lineCap = "round";
-    baseCtx.lineJoin = "round";
-    baseCtx.fillStyle = "#ffffff";
-    baseCtx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
-
-    const liveCtx = live.getContext("2d");
-    liveCtx.lineCap = "round";
-    liveCtx.lineJoin = "round";
-
-    baseCtxRef.current = baseCtx;
-    liveCtxRef.current = liveCtx;
-  }, []);
-
-  useEffect(() => {
-    if (didInitSocketRef.current) return;
-    didInitSocketRef.current = true;
-
-    const socket = io("http://localhost:5000");
-    socketRef.current = socket;
-
-    // Expose API to App.jsx
-    if (canvasApiRef) {
-      canvasApiRef.current = {
-        undo: () => socket.emit("undo"),
-        redo: () => socket.emit("redo"),
-        clearMine: () => socket.emit("clearMine")
-      };
-    }
-
-    socket.on("connect", () => {
-      const randomName = `User-${socket.id.slice(0, 4)}`;
-      socket.emit("joinRoom", { roomId: "default", userName: randomName });
-    });
-
-    socket.on("usersUpdate", (usersList) => {
-      setUsers(usersList);
-      if (typeof onUsersUpdate === "function") onUsersUpdate(usersList);
-    });
-
-    socket.on("cursorUpdate", ({ userId, cursor }) => {
-      setUsers((prev) => {
-        const next = prev.map((u) => (u.id === userId ? { ...u, cursor } : u));
-        if (typeof onUsersUpdate === "function") onUsersUpdate(next);
-        return next;
-      });
-    });
-
-    socket.on("canvasState", (operations) => {
-      const baseCtx = baseCtxRef.current;
-      if (!baseCtx) return;
-
-      baseCtx.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
-      baseCtx.fillStyle = "#ffffff";
-      baseCtx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
-      operations.forEach((op) => drawOperation(baseCtx, op));
-
-      remoteLiveMapRef.current.clear();
-      redrawLiveOverlay();
-    });
-
-    socket.on("strokeCreated", (opToStore) => {
-      const baseCtx = baseCtxRef.current;
-      if (!baseCtx) return;
-
-      drawOperation(baseCtx, opToStore);
-
-      const key = `${opToStore.userId}:${opToStore.id}`;
-      remoteLiveMapRef.current.delete(key);
-      redrawLiveOverlay();
-    });
-
-    socket.on("strokeLive", ({ userId, op }) => {
-      if (!userId || !op?.id) return;
-      if (userId === socket.id) return;
+      context.save();
+      context.lineCap = "round";
+      context.lineJoin = "round";
+      context.lineWidth = op.width || 5;
 
       if (op.type === "eraser") {
-        const baseCtx = baseCtxRef.current;
-        if (baseCtx) drawOperation(baseCtx, op);
-        return;
-      }
-
-      const key = `${userId}:${op.id}`;
-      const existing = remoteLiveMapRef.current.get(key);
-
-      if (!existing) {
-        remoteLiveMapRef.current.set(key, { ...op, points: [...op.points] });
+        context.globalCompositeOperation = "destination-out";
+        context.strokeStyle = "#ffffff";
       } else {
-        const last = existing.points[existing.points.length - 1];
-        const incoming = op.points || [];
-        const startIdx =
-          last && incoming[0] && last.x === incoming[0].x && last.y === incoming[0].y ? 1 : 0;
-        existing.points.push(...incoming.slice(startIdx));
+        context.globalCompositeOperation = "source-over";
+        context.strokeStyle = op.color || "#000000";
       }
 
-      redrawLiveOverlay();
-    });
+      context.beginPath();
+      context.moveTo(op.points[0].x, op.points[0].y);
+      for (let i = 1; i < op.points.length; i++) context.lineTo(op.points[i].x, op.points[i].y);
+      context.stroke();
+      context.restore();
+    }, []);
 
-    socket.on("strokeLiveEnd", ({ userId, strokeId }) => {
-      if (!userId) return;
-
-      if (strokeId === "*") {
-        for (const key of remoteLiveMapRef.current.keys()) {
-          if (key.startsWith(`${userId}:`)) remoteLiveMapRef.current.delete(key);
-        }
-      } else {
-        remoteLiveMapRef.current.delete(`${userId}:${strokeId}`);
+    // Expose undo/redo/clearMine to parent
+    useImperativeHandle(ref, () => ({
+      undo() {
+        socketRef.current?.emit("canvas:undo");
+      },
+      redo() {
+        socketRef.current?.emit("canvas:redo");
+      },
+      clearMine() {
+        socketRef.current?.emit("canvas:clearMine");
       }
-      redrawLiveOverlay();
-    });
+    }));
 
-    return () => {
-      socket.disconnect();
-      socketRef.current = null;
-      didInitSocketRef.current = false;
-      if (canvasApiRef) canvasApiRef.current = null;
-    };
-  }, [drawOperation, redrawLiveOverlay, onUsersUpdate, canvasApiRef]);
+    useEffect(() => {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
 
-  const emitCursorThrottled = useCallback((x, y) => {
-    const now = Date.now();
-    if (now - lastCursorEmitRef.current < CURSOR_EMIT_MS) return;
-    lastCursorEmitRef.current = now;
-    socketRef.current?.emit("cursorMove", { x, y });
-  }, []);
+      canvas.width = CANVAS_WIDTH;
+      canvas.height = CANVAS_HEIGHT;
 
-  const shouldAddPoint = (p) => {
-    if (!lastPointRef.current) return true;
-    const dx = p.x - lastPointRef.current.x;
-    const dy = p.y - lastPointRef.current.y;
-    return Math.sqrt(dx * dx + dy * dy) >= MIN_DIST;
-  };
+      const context = canvas.getContext("2d");
+      context.lineCap = "round";
+      context.lineJoin = "round";
+      setCtx(context);
 
-  const startDrawing = useCallback(
-    (e) => {
-      const ctx = baseCtxRef.current;
-      if (!ctx) return;
+      clearCanvas(context);
+    }, [clearCanvas]);
 
-      setIsDrawing(true);
+    useEffect(() => {
+      socketRef.current = io(SOCKET_URL);
 
-      const pos = getMousePos(e);
-      strokeIdRef.current = uuidv4();
-      pointsRef.current = [pos];
-      lastPointRef.current = pos;
+      socketRef.current.on("room:players", ({ players: serverPlayers }) => {
+        setPlayers(serverPlayers || []);
+        if (typeof onPlayersUpdate === "function") onPlayersUpdate(serverPlayers || []);
+      });
 
-      ctx.lineWidth = strokeWidth;
-
-      if (currentTool === "brush") {
-        ctx.globalCompositeOperation = "source-over";
-        ctx.strokeStyle = currentColor;
-      } else {
-        ctx.globalCompositeOperation = "destination-out";
-        ctx.strokeStyle = "#ffffff";
-      }
-
-      ctx.beginPath();
-      ctx.moveTo(pos.x, pos.y);
-      emitCursorThrottled(pos.x, pos.y);
-    },
-    [getMousePos, currentTool, currentColor, strokeWidth, emitCursorThrottled]
-  );
-
-  const draw = useCallback(
-    (e) => {
-      if (!isDrawing) return;
-      const ctx = baseCtxRef.current;
-      if (!ctx) return;
-
-      const pos = getMousePos(e);
-      if (!shouldAddPoint(pos)) {
-        emitCursorThrottled(pos.x, pos.y);
-        return;
-      }
-
-      const prev = lastPointRef.current;
-      lastPointRef.current = pos;
-
-      pointsRef.current = [...pointsRef.current, pos];
-
-      ctx.lineTo(pos.x, pos.y);
-      ctx.stroke();
-
-      const now = Date.now();
-      if (prev && now - lastLiveEmitRef.current >= LIVE_EMIT_MS) {
-        lastLiveEmitRef.current = now;
-        socketRef.current?.emit("strokeLive", {
-          id: strokeIdRef.current,
-          type: currentTool,
-          color: currentColor,
-          width: strokeWidth,
-          points: [prev, pos]
+      socketRef.current.on("cursor:update", ({ userId, cursor }) => {
+        setPlayers((prev) => {
+          const next = prev.map((p) => (p.id === userId ? { ...p, cursor } : p));
+          if (typeof onPlayersUpdate === "function") onPlayersUpdate(next);
+          return next;
         });
+      });
+
+      socketRef.current.on("canvas:state", ({ operations }) => {
+        if (!ctx) return;
+        clearCanvas(ctx);
+        (operations || []).forEach((op) => drawOperation(ctx, op));
+      });
+
+      socketRef.current.on("stroke:update", ({ operation }) => {
+        if (!ctx) return;
+        drawOperation(ctx, operation);
+      });
+
+      socketRef.current.on("stroke:created", ({ operation }) => {
+        if (!ctx) return;
+        drawOperation(ctx, operation);
+      });
+
+      return () => {
+        socketRef.current?.disconnect();
+      };
+    }, [ctx, clearCanvas, drawOperation, onPlayersUpdate]);
+
+    useEffect(() => {
+      if (!socketRef.current) return;
+      if (!roomId) return;
+
+      if (ctx) clearCanvas(ctx);
+
+      socketRef.current.emit("room:join", { roomId, userName });
+    }, [roomId, userName, ctx, clearCanvas]);
+
+    const getMousePos = useCallback((e) => {
+      const rect = canvasRef.current.getBoundingClientRect();
+      return {
+        x: ((e.clientX - rect.left) * CANVAS_WIDTH) / rect.width,
+        y: ((e.clientY - rect.top) * CANVAS_HEIGHT) / rect.height
+      };
+    }, []);
+
+    const startDrawing = useCallback(
+      (e) => {
+        if (!ctx) return;
+        if (!roomId || roomId === "lobby") return;
+
+        setIsDrawing(true);
+        const pos = getMousePos(e);
+        const strokeId = uuidv4();
+        setCurrentStrokeId(strokeId);
+        setCurrentPoints([pos]);
+
+        if (currentTool === "brush") {
+          ctx.strokeStyle = currentColor;
+          ctx.lineWidth = strokeWidth;
+          ctx.globalCompositeOperation = "source-over";
+        } else {
+          ctx.strokeStyle = "#ffffff";
+          ctx.lineWidth = strokeWidth;
+          ctx.globalCompositeOperation = "destination-out";
+        }
+
+        ctx.beginPath();
+        ctx.moveTo(pos.x, pos.y);
+      },
+      [ctx, roomId, getMousePos, currentTool, currentColor, strokeWidth]
+    );
+
+    const draw = useCallback(
+      (e) => {
+        if (!isDrawing || !ctx || currentPoints.length === 0) return;
+
+        const pos = getMousePos(e);
+        const points = [...currentPoints, pos];
+        setCurrentPoints(points);
+
+        ctx.lineTo(pos.x, pos.y);
+        ctx.stroke();
+
+        if (points.length % 3 === 0) {
+          socketRef.current?.emit("stroke:update", {
+            id: currentStrokeId,
+            type: currentTool,
+            color: currentColor,
+            width: strokeWidth,
+            points
+          });
+        }
+
+        socketRef.current?.emit("cursor:move", { x: pos.x, y: pos.y });
+      },
+      [isDrawing, ctx, currentPoints, currentStrokeId, currentTool, currentColor, strokeWidth, getMousePos]
+    );
+
+    const stopDrawing = useCallback(() => {
+      if (!isDrawing || currentPoints.length < 2) {
+        setIsDrawing(false);
+        setCurrentPoints([]);
+        setCurrentStrokeId(null);
+        return;
       }
 
-      emitCursorThrottled(pos.x, pos.y);
-    },
-    [isDrawing, getMousePos, currentTool, currentColor, strokeWidth, emitCursorThrottled]
-  );
+      setIsDrawing(false);
 
-  const stopDrawing = useCallback(() => {
-    if (!isDrawing) return;
-    setIsDrawing(false);
+      const operation = {
+        id: currentStrokeId,
+        type: currentTool,
+        color: currentColor,
+        width: strokeWidth,
+        points: currentPoints
+      };
 
-    const pts = pointsRef.current;
-    if (!pts || pts.length < 2) {
-      pointsRef.current = [];
-      strokeIdRef.current = null;
-      lastPointRef.current = null;
-      return;
-    }
+      socketRef.current?.emit("stroke:end", operation);
+      setCurrentPoints([]);
+      setCurrentStrokeId(null);
+    }, [isDrawing, currentStrokeId, currentTool, currentColor, strokeWidth, currentPoints]);
 
-    const finalOp = {
-      id: strokeIdRef.current,
-      type: currentTool,
-      color: currentColor,
-      width: strokeWidth,
-      points: pts
-    };
+    useEffect(() => {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
 
-    socketRef.current?.emit("strokeEnd", finalOp);
+      canvas.addEventListener("mousedown", startDrawing);
+      canvas.addEventListener("mousemove", draw);
+      canvas.addEventListener("mouseup", stopDrawing);
+      canvas.addEventListener("mouseleave", stopDrawing);
 
-    pointsRef.current = [];
-    strokeIdRef.current = null;
-    lastPointRef.current = null;
-  }, [isDrawing, currentTool, currentColor, strokeWidth]);
+      return () => {
+        canvas.removeEventListener("mousedown", startDrawing);
+        canvas.removeEventListener("mousemove", draw);
+        canvas.removeEventListener("mouseup", stopDrawing);
+        canvas.removeEventListener("mouseleave", stopDrawing);
+      };
+    }, [startDrawing, draw, stopDrawing]);
 
-  useEffect(() => {
-    const canvas = baseCanvasRef.current;
-    if (!canvas) return;
+    return (
+      <div className="canvas-wrapper" style={{ position: "relative", width: "1000px", height: "600px" }}>
+        <canvas
+          ref={canvasRef}
+          className="canvas-board"
+          style={{
+            border: "2px solid #ddd",
+            borderRadius: "8px",
+            cursor: currentTool === "eraser" ? eraserCursor : "crosshair",
+            background: "white"
+          }}
+        />
 
-    canvas.addEventListener("mousedown", startDrawing);
-    canvas.addEventListener("mousemove", draw);
-    canvas.addEventListener("mouseup", stopDrawing);
-    canvas.addEventListener("mouseleave", stopDrawing);
-
-    return () => {
-      canvas.removeEventListener("mousedown", startDrawing);
-      canvas.removeEventListener("mousemove", draw);
-      canvas.removeEventListener("mouseup", stopDrawing);
-      canvas.removeEventListener("mouseleave", stopDrawing);
-    };
-  }, [startDrawing, draw, stopDrawing]);
-
-  return (
-    <div className="canvas-wrapper" style={{ position: "relative", width: "1000px", height: "600px" }}>
-      <canvas
-        ref={baseCanvasRef}
-        className="canvas-board"
-        style={{
-          border: "2px solid #ddd",
-          borderRadius: "8px",
-          cursor: currentTool === "eraser" ? eraserCursor : "crosshair",
-          background: "white",
-          position: "absolute",
-          left: 0,
-          top: 0
-        }}
-      />
-
-      <canvas
-        ref={liveCanvasRef}
-        style={{ position: "absolute", left: 0, top: 0, pointerEvents: "none" }}
-      />
-
-      <div className="cursor-overlay">
-        {users
-          .filter((u) => u.id !== socketRef.current?.id)
-          .filter((u) => u.cursor)
-          .map((u) => (
-            <div
-              key={u.id}
-              className="remote-cursor"
-              style={{
-                left: `${u.cursor.x}px`,
-                top: `${u.cursor.y}px`,
-                background: u.color,
-                color: "white"
-              }}
-              title={u.name}
-            >
-              {u.name.slice(0, 2).toUpperCase()}
-            </div>
-          ))}
+        <div className="cursor-overlay">
+          {players
+            .filter((p) => p.id !== socketRef.current?.id)
+            .filter((p) => p.cursor)
+            .map((p) => (
+              <div
+                key={p.id}
+                className="remote-cursor"
+                style={{
+                  left: `${p.cursor.x}px`,
+                  top: `${p.cursor.y}px`,
+                  background: p.color,
+                  color: "white"
+                }}
+                title={p.name}
+              >
+                {p.name.slice(0, 2).toUpperCase()}
+              </div>
+            ))}
+        </div>
       </div>
-    </div>
-  );
-};
+    );
+  }
+);
 
 export default CanvasBoard;
