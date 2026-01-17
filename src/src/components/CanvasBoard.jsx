@@ -1,25 +1,33 @@
 /* eslint-disable react-hooks/immutability */
-/* eslint-disable no-unused-vars */
-// src/src/components/CanvasBoard.jsx
-import React, { useEffect, useRef, useCallback, useState } from 'react';
+// src/src/components/CanvasBoard.jsx - COMPLETE WITH DYNAMIC ERASER CURSOR
+import React, { useEffect, useRef, useCallback, useState, useMemo } from 'react';
 import io from 'socket.io-client';
 import { v4 as uuidv4 } from 'uuid';
 
-const CanvasBoard = () => {
+const CanvasBoard = ({ currentTool, currentColor, strokeWidth }) => {
   const canvasRef = useRef(null);
   const socketRef = useRef(null);
   
-  // Canvas state
   const [ctx, setCtx] = useState(null);
   const [isDrawing, setIsDrawing] = useState(false);
   const [currentPoints, setCurrentPoints] = useState([]);
-  const [currentTool, setCurrentTool] = useState('brush');
-  const [currentColor, setCurrentColor] = useState('#000000');
-  const [strokeWidth, setStrokeWidth] = useState(5);
   const [users, setUsers] = useState([]);
   
   const CANVAS_WIDTH = 1000;
   const CANVAS_HEIGHT = 600;
+
+  // Generate dynamic eraser cursor based on strokeWidth
+  const eraserCursor = useMemo(() => {
+    const size = Math.max(strokeWidth * 2, 16);
+    const halfSize = size / 2;
+    const svg = `
+      <svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">
+        <circle cx="${halfSize}" cy="${halfSize}" r="${halfSize - 2}" fill="rgba(255,255,255,0.5)" stroke="%23ff4444" stroke-width="2" stroke-dasharray="4,2"/>
+      </svg>
+    `;
+    const encoded = encodeURIComponent(svg.trim());
+    return `url("data:image/svg+xml,${encoded}") ${halfSize} ${halfSize}, auto`;
+  }, [strokeWidth]);
 
   // Initialize canvas
   useEffect(() => {
@@ -31,7 +39,7 @@ const CanvasBoard = () => {
       context.lineCap = 'round';
       context.lineJoin = 'round';
       context.fillStyle = '#ffffff';
-      context.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT); // White background
+      context.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
       setCtx(context);
     }
   }, []);
@@ -78,10 +86,8 @@ const CanvasBoard = () => {
     setIsDrawing(true);
     const pos = getMousePos(e);
     
-    // Start new stroke
     setCurrentPoints([pos]);
     
-    // Set drawing style
     if (currentTool === 'brush') {
       ctx.strokeStyle = currentColor;
       ctx.lineWidth = strokeWidth;
@@ -89,7 +95,7 @@ const CanvasBoard = () => {
     } else {
       ctx.strokeStyle = '#ffffff';
       ctx.lineWidth = strokeWidth;
-      ctx.globalCompositeOperation = 'destination-out'; // Eraser
+      ctx.globalCompositeOperation = 'destination-out';
     }
     
     ctx.beginPath();
@@ -103,11 +109,9 @@ const CanvasBoard = () => {
     const points = [...currentPoints, pos];
     setCurrentPoints(points);
     
-    // Draw line segment
     ctx.lineTo(pos.x, pos.y);
     ctx.stroke();
     
-    // Send cursor position
     socketRef.current?.emit('cursorMove', { 
       x: pos.x, 
       y: pos.y 
@@ -123,7 +127,6 @@ const CanvasBoard = () => {
     
     setIsDrawing(false);
     
-    // Create operation object
     const operation = {
       id: uuidv4(),
       type: currentTool,
@@ -135,11 +138,10 @@ const CanvasBoard = () => {
     
     console.log('✍️ Stroke complete:', operation);
     
-    // TODO: Send to server (Step 6)
     setCurrentPoints([]);
   }, [isDrawing, currentTool, currentColor, strokeWidth, currentPoints]);
 
-  // Event handlers
+  // Event listeners
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -165,12 +167,11 @@ const CanvasBoard = () => {
         style={{
           border: '2px solid #ddd',
           borderRadius: '8px',
-          cursor: currentTool === 'eraser' ? 'grab' : 'crosshair',
+          cursor: currentTool === 'eraser' ? eraserCursor : 'crosshair',
           background: 'white'
         }}
       />
       
-      {/* Remote cursors overlay */}
       <div className="cursor-overlay">
         {users.map(user => user.cursor && (
           <div 
