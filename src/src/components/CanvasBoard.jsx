@@ -12,7 +12,7 @@ import React, {
 import io from "socket.io-client";
 import { v4 as uuidv4 } from "uuid";
 
-const SOCKET_URL = "http://localhost:5000";
+const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || "http://localhost:5000";
 
 const CanvasBoard = forwardRef(
   ({ roomId, userName, currentTool, currentColor, strokeWidth, onPlayersUpdate }, ref) => {

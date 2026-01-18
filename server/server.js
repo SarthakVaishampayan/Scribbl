@@ -10,10 +10,14 @@ const { addOperation, undo, redo, clear } = require("./drawing-state");
 const app = express();
 const server = http.createServer(app);
 
-app.use(cors({ origin: "http://localhost:5173" }));
+const allowedOrigins = process.env.CORS_ORIGIN 
+  ? process.env.CORS_ORIGIN.split(",").map(origin => origin.trim())
+  : ["http://localhost:5173"];
+
+app.use(cors({ origin: allowedOrigins }));
 
 const io = new Server(server, {
-  cors: { origin: "http://localhost:5173", methods: ["GET", "POST"] }
+  cors: { origin: allowedOrigins, methods: ["GET", "POST"] }
 });
 
 app.get("/", (req, res) => res.send("Realtime Collaborative Canvas Backend"));
