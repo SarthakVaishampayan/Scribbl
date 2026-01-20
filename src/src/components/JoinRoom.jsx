@@ -1,4 +1,4 @@
-// D:\project\collaborative canvas\src\src\components\JoinRoom.jsx
+
 import React, { useState } from "react";
 
 const JoinRoom = ({ onJoin }) => {

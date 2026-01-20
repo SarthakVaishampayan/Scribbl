@@ -1,22 +1,22 @@
-# Vercel Deployment Settings - Quick Reference
+ Vercel Deployment Settings - Quick Reference
 
-## Configuration Summary
+ Configuration Summary
 
-### Framework Preset
-- **Select**: `Vite` (should auto-detect)
+Framework Preset
+- Select: `Vite` (should auto-detect)
 - If not detected, choose `Other` - Vercel will use vercel.json
 
-### Root Directory
-- **Set to**: `.` (project root)
+ Root Directory
+- Set to: `.` (project root)
 - This is correct because vercel.json handles subdirectory paths
 
-### Build Settings (from vercel.json)
+Build Settings (from vercel.json)
 These should auto-populate, but verify:
-- **Build Command**: `cd src && npm install && npm run build`
-- **Output Directory**: `src/dist`
-- **Install Command**: `cd src && npm install` (optional)
+- Build Command: `cd src && npm install && npm run build`
+- Output Directory: `src/dist`
+- Install Command: `cd src && npm install` (optional)
 
-### Environment Variables (REQUIRED - Add This!)
+Environment Variables (REQUIRED - Add This!)
 
 Click "Add" in Environment Variables section:
 
@@ -24,27 +24,26 @@ Click "Add" in Environment Variables section:
 |-----|-------|--------------|
 | `VITE_SOCKET_URL` | `https://scribbll.onrender.com` | Production, Preview, Development |
 
-⚠️ **Important**: 
+ Important: 
 - No trailing slash in the URL
 - Add to all three environments (Production, Preview, Development)
-
-### Advanced Settings
+ Advanced Settings
 - Leave as default
 - The `vercel.json` file handles the SPA routing rewrite
 
----
 
-## What Vercel Should Auto-Detect
+
+What Vercel Should Auto-Detect
 
 Since you have `vercel.json` in the root:
-- ✅ Framework: Vite
-- ✅ Build command
-- ✅ Output directory
-- ❌ Environment variables (you must add manually)
+-  Framework: Vite
+-  Build command
+-  Output directory
+-  Environment variables (you must add manually)
 
----
 
-## After Deployment
+
+ After Deployment
 
 Once Vercel deploys:
 1. Copy your Vercel URL (e.g., `https://scribbl.vercel.app`)

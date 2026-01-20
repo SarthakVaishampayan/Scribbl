@@ -1,5 +1,6 @@
+/* eslint-disable react-hooks/refs */
 /* eslint-disable react-hooks/immutability */
-// src/src/components/CanvasBoard.jsx
+
 import React, {
   useEffect,
   useRef,
@@ -19,15 +20,15 @@ const CanvasBoard = forwardRef(
     const wrapperRef = useRef(null);
     const socketRef = useRef(null);
 
-    // Canvas and rendering state are held in refs to avoid re-rendering at pointer frequency.
+    
     const ctxRef = useRef(null);
     const isDrawingRef = useRef(false);
     const currentStrokeIdRef = useRef(null);
     const currentPointsRef = useRef([]);
 
-    // Authoritative committed operations (from server) + live previews (in-progress strokes).
+    
     const committedOpsRef = useRef([]);
-    const previewByStrokeIdRef = useRef(new Map()); // strokeId -> operation
+    const previewByStrokeIdRef = useRef(new Map()); 
 
     const playersRef = useRef([]);
     const [, forceUiUpdate] = React.useReducer((x) => x + 1, 0);
@@ -67,8 +68,7 @@ const CanvasBoard = forwardRef(
       context.restore();
     }, []);
 
-    // Simple path smoothing: quadratic curves between midpoints.
-    // This improves visual smoothness without a heavy algorithm.
+   
     function strokePath(context, points) {
       if (!points || points.length < 2) return;
 
@@ -121,15 +121,15 @@ const CanvasBoard = forwardRef(
 
         clearCanvas(context);
 
-        // 1) Draw committed operations (authoritative)
+        
         for (const op of committedOpsRef.current) drawOperation(context, op);
 
-        // 2) Draw all in-progress previews last
+        
         for (const op of previewByStrokeIdRef.current.values()) drawOperation(context, op);
       });
     }, [clearCanvas, drawOperation]);
 
-    // Expose undo/redo/clearMine to parent
+    
     useImperativeHandle(ref, () => ({
       undo() {
         socketRef.current?.emit("canvas:undo");
@@ -158,7 +158,7 @@ const CanvasBoard = forwardRef(
     }, [clearCanvas]);
 
     useEffect(() => {
-      // Socket lifecycle + basic error handling (no app behavior changes; UI-only status).
+      
       socketRef.current = io(SOCKET_URL, { transports: ["websocket", "polling"] });
 
       socketRef.current.on("connect", () => setConnectionStatus("connected"));
@@ -187,14 +187,14 @@ const CanvasBoard = forwardRef(
 
       socketRef.current.on("stroke:update", ({ operation }) => {
         if (!operation?.id) return;
-        // Store preview (so we don't permanently draw it and then draw again on finalize)
+        
         previewByStrokeIdRef.current.set(operation.id, operation);
         scheduleRender();
       });
 
       socketRef.current.on("stroke:created", ({ operation }) => {
         if (!operation?.id) return;
-        // Remove preview and commit operation to the authoritative layer
+        
         previewByStrokeIdRef.current.delete(operation.id);
         committedOpsRef.current = [...committedOpsRef.current, operation];
         scheduleRender();
@@ -234,7 +234,7 @@ const CanvasBoard = forwardRef(
         currentStrokeIdRef.current = strokeId;
         currentPointsRef.current = [pos];
 
-        // Put local stroke into the preview map immediately so rendering is unified.
+        
         previewByStrokeIdRef.current.set(strokeId, {
           id: strokeId,
           type: currentTool,

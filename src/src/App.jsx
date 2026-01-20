@@ -1,4 +1,4 @@
-// src/src/App.jsx
+
 import React, { useState, useRef } from "react";
 import CanvasBoard from "./components/CanvasBoard";
 import "./App.css";

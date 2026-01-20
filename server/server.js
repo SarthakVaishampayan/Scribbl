@@ -1,4 +1,4 @@
-// server/server.js
+
 const express = require("express");
 const http = require("http");
 const cors = require("cors");
@@ -42,8 +42,6 @@ function safeName(name) {
 }
 
 function validateOperation(op) {
-  // Defensive validation: never trust the network.
-  // If a client sends malformed data, we drop it rather than corrupt shared room state.
   if (!op || typeof op !== "object") return false;
   if (op.type !== "brush" && op.type !== "eraser") return false;
   if (typeof op.id !== "string" || !op.id) return false;
@@ -137,7 +135,7 @@ io.on("connection", (socket) => {
     socket.to(roomId).emit("cursor:update", { userId: socket.id, cursor: { x, y } });
   });
 
-  // Live stroke previews (not stored)
+ 
   socket.on("stroke:update", (operation) => {
     const roomId = socket.data.roomId;
     if (!roomId || roomId === "lobby") return;
@@ -146,7 +144,7 @@ io.on("connection", (socket) => {
     socket.to(roomId).emit("stroke:update", { operation });
   });
 
-  // Stroke finished: store in history with userId
+ 
   socket.on("stroke:end", (operation) => {
     const roomId = socket.data.roomId;
     if (!roomId || roomId === "lobby") return;
@@ -160,7 +158,7 @@ io.on("connection", (socket) => {
     io.to(roomId).emit("stroke:created", { roomId, operation: opToStore });
   });
 
-  // Global undo: remove the most recent operation in the room (regardless of author).
+  
   socket.on("canvas:undo", () => {
     const roomId = socket.data.roomId;
     if (!roomId || roomId === "lobby") return;
@@ -174,7 +172,7 @@ io.on("connection", (socket) => {
     }
   });
 
-  // Global redo: restore the most recently undone operation in the room.
+  
   socket.on("canvas:redo", () => {
     const roomId = socket.data.roomId;
     if (!roomId || roomId === "lobby") return;
@@ -188,7 +186,7 @@ io.on("connection", (socket) => {
     }
   });
 
-  // Clear mine: remove ONLY this user's brush strokes, keep all erasers
+  
   socket.on("canvas:clearMine", () => {
     const roomId = socket.data.roomId;
     const userId = socket.id;
@@ -201,7 +199,7 @@ io.on("connection", (socket) => {
       (op) => !(op.userId === userId && op.type === "brush")
     );
 
-    // Keep global redo stack consistent too.
+    
     if (Array.isArray(room.redoStack) && room.redoStack.length) {
       room.redoStack = room.redoStack.filter(
         (op) => !(op.userId === userId && op.type === "brush")
@@ -211,7 +209,7 @@ io.on("connection", (socket) => {
     io.to(roomId).emit("canvas:state", { roomId, operations: room.operations });
   });
 
-  // Optional global clear (kept for reference, not used by UI)
+ 
   socket.on("canvas:clear", () => {
     const roomId = socket.data.roomId;
     if (!roomId || roomId === "lobby") return;

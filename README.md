@@ -1,33 +1,30 @@
-"# Collaborative Canvas
+--Collaborative Canvas
 
 A real-time, multi-user drawing board built with React (Vite) on the frontend and Node.js + Socket.io on the backend.  
 Multiple users can draw together in the same room, see each others’ cursors, and manage their own undo/redo history.
 
----
 
-## Getting Started
+--Getting Started
 
-### Prerequisites
+Prerequisites
 
 - Node.js (LTS recommended)
 - npm
 
-### Install dependencies
+--Install dependencies
 
 From the project root:
 
-```bash
-# Installs root dev tools AND (via postinstall) installs ./src and ./server deps
-npm install
-```
+bash
 
-### Run the app
+Installs root dev tools AND (via postinstall) installs ./src and ./server deps
+-npm install
+
+ Run the canvas
 
 From the project root:
-
-```bash
+bash
 npm start
-```
 
 This will:
 
@@ -36,26 +33,21 @@ This will:
 
 You can also run them separately:
 
-```bash
+bash
 # In one terminal (from root)
 npm run server
 
-# In another terminal (from root)
-npm run client
-```
+# In another terminal (root/src/)
+npm run dev
 
 By default, the frontend connects to `http://localhost:5000` (via fallback in code).  
 To point the frontend to a different backend, create a `.env` file in `src/`:
 
-```bash
-VITE_SOCKET_URL=https://your-backend-url
-```
+bash
+VITE_SOCKET_URL=https://scribbll.onrender.com
 
----
 
-## Project Structure
-
-```text
+ --Project Structure
 .
 ├── server/               # Node + Socket.io backend
 │   ├── server.js         # Express + Socket.io setup and event handlers
@@ -74,18 +66,16 @@ VITE_SOCKET_URL=https://your-backend-url
 ├── package.json          # Root scripts (dev, server, client)
 ├── ARCHITECTURE.md       # Protocol, data flow, and design decisions
 └── README.md             # You are here
-```
 
----
 
-## How It Works (Short Version)
+ --How It Works (Short Version)
 
 - The frontend renders an HTML5 `<canvas>` and listens to mouse events.
 - As the user draws:
-  - The canvas updates **locally** for instant feedback.
+  - The canvas updates locally for instant feedback.
   - Batched stroke updates are sent over WebSockets to the backend.
 - The backend:
-  - Manages **rooms** and **connected users**.
+  - Manages rooms and connected users.
   - Validates and stores completed strokes in a per-room operation history.
   - Broadcasts live stroke updates and full canvas state to clients in the room.
 - Other clients:
@@ -93,42 +83,36 @@ VITE_SOCKET_URL=https://your-backend-url
   - Draw those strokes onto their local canvas to stay in sync.
 
 See `ARCHITECTURE.md` for the detailed data flow and WebSocket protocol.
+Using the App
 
----
-
-## Using the App
-
-### Join a room
+--oin a room
 
 - Open `http://localhost:5173` in your browser.
 - Enter a user name and a room ID.
   - Room IDs are normalized on the server (spaces → dashes); an empty room ID falls back to `"lobby"`.
 - Open a second window/device and join the same room ID to collaborate.
+ Drawing
 
-### Drawing
+- Brush: draw colored strokes
+- Eraser: erase by cutting out from existing strokes
+- Color and stroke width are configurable in the UI and used in the operation payloads.
 
-- **Brush**: draw colored strokes
-- **Eraser**: erase by cutting out from existing strokes
-- **Color** and **stroke width** are configurable in the UI and used in the operation payloads.
-
-As you draw:
+--As you draw:
 
 - Other users see your stroke appear in (near) real-time.
 - You see colored cursor badges showing where other users are drawing.
 
-### Undo / Redo / Clear Mine
+--Undo / Redo / Clear Mine
 
 The canvas component exposes controls (wired via `useImperativeHandle`) for:
 
-- **Undo**: removes the **most recent stroke in the room** (global timeline)
-- **Redo**: restores the most recently undone stroke (global timeline)
-- **Clear Mine**: removes all your brush strokes in the room (eraser strokes are retained)
+- Undo: removes the most recent stroke in the room(global timeline)
+- Redo: restores the most recently undone stroke (global timeline)
+- Clear Mine: removes all your brush strokes in the room (eraser strokes are retained)
 
-Note: **Undo/redo are global** and affect the shared room timeline (explained in `ARCHITECTURE.md`).
+Note: Undo/redo are global and affect the shared room timeline (explained in `ARCHITECTURE.md`).
 
----
-
-## Testing with Multiple Users
+--Testing with Multiple Users
 
 To simulate multiple users:
 
@@ -144,51 +128,40 @@ Suggested tests:
 - Undo and redo from one user while another continues drawing.
 - Watch the cursor badges move as the other user draws.
 
----
 
-## Configuration
-
-### Backend environment variables
+--Configuration
+ Backend environment variables
 
 - `PORT` — server port (default: `5000`)
 - `CORS_ORIGIN` — comma-separated list of allowed origins (default: `http://localhost:5173`)
 
-### Frontend environment variables
+ Frontend environment variables
 
-- `VITE_SOCKET_URL` — backend base URL (default: `http://localhost:5000`)
+- `VITE_SOCKET_URL` — backend base URL (https://scribbll.onrender.com) (default: `http://localhost:5000`)
 
----
+ Known Limitations / Trade-offs
 
-## Known Limitations / Trade-offs
-
-- **Per-user undo/redo**
-  - Undo/redo affects only the user’s own strokes, not a global shared timeline.
-  - This avoids one user unexpectedly removing another user’s work, but differs from a strict “global undo” model.
-- **In-memory state only**
+- In-memory state only
   - Room state is kept in memory in the Node process.
   - Restarting the server clears all rooms and drawings; there is no persistence layer yet.
-- **No authentication**
+- No authentication
   - Users are identified by socket ID and a display name.
-- **Desktop-focused**
+- Desktop-focused
   - Main interaction is mouse-based; touch/mobile support isn’t fully optimized yet.
 
----
 
-## Time Spent
+--Time Spent
 
-Fill this in with your actual time:
+- Backend (rooms, state, undo/redo, validation): 15
+- Frontend (canvas drawing, UI, sockets): 12h
+- Documentation and polish: 8h
 
-- Backend (rooms, state, undo/redo, validation): _[fill in]_
-- Frontend (canvas drawing, UI, sockets): _[fill in]_
-- Documentation and polish: _[fill in]_
 
----
 
-## Future Improvements
+ --Future Improvements
 
-- Global (multi-user) undo/redo timeline with clear conflict policies
 - Touch support and improved mobile layout
 - Persistence (save/load room sessions)
 - Performance metrics (FPS/latency indicators)
 - More tools (shapes, text, selection)
-" 
+

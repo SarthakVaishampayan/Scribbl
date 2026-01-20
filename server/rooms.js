@@ -1,16 +1,6 @@
-// server/rooms.js
+
 const rooms = new Map();
 
-/**
- * Room shape:
- * {
- *   id: string,
- *   users: Map<socketId, { id, name, color, cursor, joinedAt }>,
- *   operations: Array<any>,
- *   // Global redo stack (operations undone from the end)
- *   redoStack: Array<any>
- * }
- */
 
 function createRoom(roomId) {
   return {
@@ -37,7 +27,7 @@ function removeUserFromRoom(roomId, socketId) {
 
   room.users.delete(socketId);
 
-  // If no users left, drop room to free memory
+
   if (room.users.size === 0 && roomId !== "lobby") {
     rooms.delete(roomId);
   }

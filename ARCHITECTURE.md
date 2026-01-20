@@ -1,348 +1,90 @@
-"# Architecture
+--Architecture
 
-This document explains how the collaborative canvas works under the hood:  
-data flow, WebSocket protocol, undo/redo strategy, performance decisions, and how conflicts are handled.
+This document explains how the collaborative canvas works internally — how data moves through the system, how WebSockets are used, how undo/redo is handled, and what decisions were made around performance and conflict handling.
 
----
+--High-level overview
 
-## High-Level Overview
+The application is split into two main parts.
 
-The app is split into two main pieces:
+-Frontend (React + Vite)
+The frontend is responsible for rendering the drawing canvas and UI. It listens to mouse events, draws on the HTML5 <canvas>, and communicates with the backend using Socket.io to send and receive drawing and cursor updates.
 
-- **Frontend (React + Vite)**
-  - Renders the drawing canvas and UI.
-  - Listens to mouse events and updates the HTML5 `<canvas>`.
-  - Connects to the backend via Socket.io and sends/receives drawing and cursor events.
+-Backend (Node.js + Socket.io)
+The backend manages rooms and connected users. It acts as the source of truth by validating and storing completed drawing actions, and it broadcasts live updates and full canvas snapshots to all clients.
 
-- **Backend (Node.js + Socket.io)**
-  - Manages rooms and users.
-  - Validates and stores completed stroke operations as the source of truth.
-  - Broadcasts live drawing updates and full canvas state snapshots to clients.
+The core concept in the system is a stroke operation. A stroke represents one continuous brush or eraser action and is stored as a list of points along with metadata like color, width, and type.
 
-The key abstraction is a **stroke operation**: one continuous brush or eraser stroke drawn by a user, represented as a list of points plus metadata.
+--Data flow (end-to-end)
 
----
+Pointer events are captured on the client (mousedown, mousemove, mouseup).
+While drawing, the client updates the canvas locally for instant feedback, emits throttled live stroke previews and cursor positions, and finally sends a completed stroke to the server.
 
-## Data Flow Diagram (end-to-end)
+The server treats completed strokes as authoritative. Live updates are broadcast to other users but not stored. Final strokes are validated, stored in the room’s operation list, and then broadcast to all clients. Undo and redo operations modify this shared operation list and trigger a full resync.
 
-```text
-Pointer events (client)
-  └─ mousedown/mousemove/mouseup
-      ├─ local preview update (requestAnimationFrame render)
-      ├─ emit stroke:update (throttled ~30fps)
-      ├─ emit cursor:move (throttled)
-      └─ emit stroke:end (final operation)
+Clients receive live previews, finalized strokes, or full canvas state updates and redraw accordingly.
 
-Socket.io (server: authoritative room timeline)
-  ├─ stroke:update  ──► broadcast preview to other clients (not stored)
-  ├─ stroke:end     ──► validate + append to room.operations + clear redo stack
-  ├─ canvas:undo    ──► pop last op from room.operations -> push to room.redoStack
-  └─ canvas:redo    ──► pop from room.redoStack -> push back to room.operations
+--Joining a room
 
-Clients (sync)
-  ├─ stroke:update  ──► store preview by strokeId -> rAF redraw
-  ├─ stroke:created ──► move from preview -> committed ops -> rAF redraw
-  └─ canvas:state   ──► replace committed ops -> clear previews -> rAF redraw
-```
+On the frontend, the user provides a name and a room ID. Once the Socket.io connection is established, the client emits a room:join event with this information.
 
----
+On the backend, the room ID is normalized (trimmed, spaces replaced, and defaulted to lobby if empty). A color is assigned to the user, either from the client or generated deterministically from the socket ID. The server creates the room if it doesn’t exist, adds the user, and sends back the current canvas state. It also broadcasts an updated player list to everyone in the room.
 
-## Data Flow
+When the client receives the canvas state, it clears the local canvas and replays all stored operations to reconstruct the drawing exactly as it exists on the server.
 
-### 1. Joining a room
+--Drawing a stroke
 
-**Frontend**
+When the user presses the mouse button, the client generates a new stroke ID, captures the first point, and configures the canvas context based on whether the user is drawing or erasing. A new path is started immediately.
 
-1. User enters:
-   - `userName`
-   - `roomId` (example: `room-123`)
-2. Client opens a Socket.io connection to the backend.
-3. Client emits:
+As the mouse moves, points are added to the current stroke. Very close points are filtered out to reduce jitter and unnecessary network traffic. The canvas is updated locally using requestAnimationFrame to keep rendering smooth. At the same time, the client emits throttled stroke:update events for live previews and cursor:move events for cursor sharing.
 
-```js
-socket.emit("room:join", { roomId, userName });
-```
+When the stroke ends, the client sends a stroke:end event containing the full operation.
 
-**Backend**
+The backend broadcasts live stroke updates to other users without storing them. When a stroke ends, the server validates it, adds metadata like user ID and timestamp, stores it in the room’s operation list, clears the redo stack, and broadcasts the finalized stroke to everyone.
 
-1. Normalizes the `roomId`:
-   - Trims, replaces spaces with dashes, defaults to `lobby` if empty.
-2. Picks a user color:
-   - Uses the client-provided color if present, otherwise chooses a deterministic `hsl(...)` based on socket ID.
-3. Creates or fetches the room via `getOrCreateRoom(roomId)`.
-4. Adds the user to `room.users`.
-5. Sends the current canvas state:
+Other clients render both live previews and finalized strokes using the same shared drawing helper.
 
-```js
-socket.emit("canvas:state", { roomId, operations: room.operations });
-```
+--Cursor updates
 
-6. Broadcasts the updated player list:
+While drawing, the client sends cursor positions to the server. The server stores the latest cursor position per user and broadcasts it to the rest of the room. On the frontend, these cursor positions are rendered as small colored indicators so users can see where others are drawing in real time.
 
-```js
-io.to(roomId).emit("room:players", { roomId, players: getPlayers(roomId) });
-```
+--WebSocket protocol
 
-**Frontend (on join)**
+Client → Server events include joining and leaving rooms, sending cursor positions, live stroke updates, finalized strokes, undo/redo actions, and clearing strokes (either per user or for the whole room).
 
-- Clears the local canvas.
-- Replays every operation from `canvas:state` to reconstruct the current drawing.
+Server → Client events include player list updates, cursor updates, full canvas state syncs, live stroke previews, and finalized stroke broadcasts.
 
----
+--Undo and redo strategy
 
-### 2. Drawing a stroke
+Each room maintains two data structures: an ordered list of completed operations and a redo stack.
 
-**Frontend**
+Undo works globally. When an undo request is received, the most recent operation (regardless of author) is removed from the operation list and pushed onto the redo stack. The server then broadcasts the full canvas state so all clients redraw from the same authoritative history.
 
-1. On `mousedown`:
-   - Generates a new stroke ID (`uuidv4()`).
-   - Captures the first point in canvas coordinates.
-   - Configures the canvas context:
-     - Brush: `globalCompositeOperation = "source-over"`
-     - Eraser: `globalCompositeOperation = "destination-out"`
-   - Starts the path with `beginPath()`.
+Redo reverses this process by moving the most recent operation from the redo stack back into the main operation list and rebroadcasting the canvas state.
 
-2. On `mousemove` while drawing:
-   - Adds new points to the current stroke.
-   - Filters points that are too close together (reduces jitter + event spam).
-   - Updates local preview state and renders on the next animation frame (`requestAnimationFrame`).
-   - Emits a live preview update (throttled, ~30fps):
+There is also a “clear mine” action that removes only the current user’s brush strokes while preserving eraser actions. Both the operation list and redo stack are filtered to stay consistent, followed by a full canvas resync.
 
-```js
-socket.emit("stroke:update", {
-  id,
-  type,   // "brush" | "eraser"
-  color,
-  width,
-  points  // [{ x, y }, ...]
-});
-```
+Undo and redo are intentionally global to keep the system simple and consistent across all clients.
 
-   - Also emits cursor position:
+--Performance decisions
 
-```js
-socket.emit("cursor:move", { x, y });
-```
+Mouse events fire extremely frequently, so the client batches stroke points, filters out insignificant movement, and throttles network messages. Stroke previews are sent at roughly 30 frames per second, while cursor updates are sent at around 20 frames per second. This significantly reduces bandwidth usage while keeping the drawing experience smooth.
 
-3. On `mouseup` / `mouseleave`:
-   - Finalizes the operation and emits:
+Rendering is also limited to one redraw per animation frame using requestAnimationFrame. The server only stores completed strokes, while clients maintain two conceptual layers: committed strokes from the server and temporary preview strokes. Whenever a full canvas state is received, the client clears the canvas, replays all committed operations in order, and then redraws any active previews.
 
-```js
-socket.emit("stroke:end", { id, type, color, width, points });
-```
+This approach is simple, reliable, and works well for typical room sizes. More advanced optimizations like snapshots or bitmap layers can be added later if needed.
 
-**Backend**
+The backend validates all incoming stroke data to prevent malformed or malicious payloads from affecting shared state.
 
-- On `stroke:update`:
-  - Validates the payload shape.
-  - Broadcasts to everyone else in the room (preview only; not stored):
+--Conflict handling
 
-```js
-socket.to(roomId).emit("stroke:update", { operation });
-```
+Drawing conflicts are resolved naturally by ordering. Strokes are applied in sequence, so later strokes appear on top of earlier ones. Erasers use destination-out, which removes pixels from whatever has already been drawn.
 
-- On `stroke:end`:
-  - Validates, enriches with `userId` + `timestamp`, stores into `room.operations`.
-  - Broadcasts finalized operation:
+Multiple users can draw at the same time. Each user sees their own strokes instantly, while remote strokes appear as network updates arrive. Finalized strokes are always appended to the server’s authoritative history.
 
-```js
-io.to(roomId).emit("stroke:created", { roomId, operation: opToStore });
-```
+Undo and redo conflicts are avoided by keeping these actions global. Any undo or redo triggers a full canvas resync so every client stays consistent.
 
-**Other clients**
+--Summary
 
-- On `stroke:update` and `stroke:created`, they render the operation via a shared `drawOperation(...)` helper.
-
----
-
-### 3. Cursor updates
-
-**Frontend**
-
-- Emits `cursor:move` as the user draws.
-
-**Backend**
-
-- Stores the latest cursor position on the user record in the room.
-- Broadcasts to others:
-
-```js
-socket.to(roomId).emit("cursor:update", { userId: socket.id, cursor: { x, y } });
-```
-
-**Frontend**
-
-- Stores cursor data inside a `players` list and renders a small colored badge overlay for each remote user.
-
----
-
-## WebSocket Protocol
-
-### Client → Server
-
-- **`room:join`**  
-  Payload: `{ roomId: string, userName: string }`  
-  Join (or create) a room; server responds with canvas state + player list.
-
-- **`room:leave`**  
-  Payload: none  
-  Leave the current room.
-
-- **`cursor:move`**  
-  Payload: `{ x: number, y: number }`  
-  Send cursor position in canvas coordinates.
-
-- **`stroke:update`**  
-  Payload: `{ id, type, color, width, points[] }`  
-  Live stroke preview updates; not stored in history.
-
-- **`stroke:end`**  
-  Payload: `{ id, type, color, width, points[] }`  
-  Final stroke operation; stored in history and broadcast.
-
-- **`canvas:undo`**  
-  Payload: none  
-  Undo the user’s most recent stroke in this room.
-
-- **`canvas:redo`**  
-  Payload: none  
-  Redo the user’s most recently undone stroke.
-
-- **`canvas:clearMine`**  
-  Payload: none  
-  Remove all brush strokes authored by this user in the room (erasers are preserved).
-
-- **`canvas:clear`** (optional, not used by UI)  
-  Payload: none  
-  Clears all operations in the room.
-
----
-
-### Server → Client
-
-- **`room:players`**  
-  Payload: `{ roomId, players: Array<{ id, name, color, cursor? }> }`  
-  Broadcast of who is currently in the room (and their color / cursor).
-
-- **`cursor:update`**  
-  Payload: `{ userId, cursor: { x, y } }`  
-  Cursor update for a specific remote user.
-
-- **`canvas:state`**  
-  Payload: `{ roomId, operations: Operation[] }`  
-  Full authoritative operation history (used on join + undo/redo + clear).
-
-- **`stroke:update`**  
-  Payload: `{ operation }`  
-  Live, in-progress stroke segments from another user.
-
-- **`stroke:created`**  
-  Payload: `{ roomId, operation }`  
-  Finalized stroke operation appended to history.
-
----
-
-## Undo/Redo Strategy
-
-### Data structures
-
-Each room maintains:
-
-- `operations: Operation[]`  
-  The authoritative history of completed strokes.
-
-- `redoStack: Operation[]`  
-  A **global** redo stack for the room (operations removed from the end of `operations`).
-
-### Undo (global)
-
-When a client emits `canvas:undo`:
-
-1. Pop the most recent operation from `room.operations` (regardless of author).
-2. Push it onto `room.redoStack`.
-3. Broadcast a full `canvas:state` to all clients so everyone redraws from the same authoritative timeline.
-
-### Redo (global)
-
-When a client emits `canvas:redo`:
-
-1. Pop the most recent entry from `room.redoStack`.
-2. Push it back into `room.operations`.
-3. Broadcast `canvas:state` to resync.
-
-### Clear mine
-
-`canvas:clearMine` filters `room.operations` to remove only that user’s brush strokes (keeps eraser operations), and also filters `room.redoStack` to keep the redo stack consistent. Then it broadcasts `canvas:state`.
-
-### Conflict policy for global undo/redo
-
-- Undo/redo is **global** by design: if User A hits undo, they may undo User B’s last stroke if that was the latest operation.
-- Consistency is maintained by the server broadcasting `canvas:state` after every undo/redo, so every client rebuilds the canvas from the same operation list.
-
----
-
-## Performance Decisions
-
-### Batching stroke points
-
-Mouse move events can fire very frequently. The client:
-
-- Filters points that are too close together (distance threshold scales with stroke width)
-- Sends `stroke:update` at most ~30fps (throttled)
-- Sends `cursor:move` at most ~20fps (throttled)
-
-Trade-offs:
-
-- Fewer network messages and lower bandwidth usage
-- Slightly reduced remote granularity, still visually smooth
-
-### Canvas rendering approach
-
-- Each client renders at most once per animation frame (`requestAnimationFrame`) to avoid over-drawing on high-frequency events.
-- The server stores only completed strokes (`stroke:end`) as the source of truth.
-- Clients keep two conceptual layers:
-  - **Committed layer**: `room.operations` (authoritative)
-  - **Preview layer**: in-progress strokes (by `strokeId`) that should not permanently mutate the committed layer
-- On `canvas:state`, clients clear and replay the entire committed operation list in order, then paint previews on top.
-
-This is simple and reliable for typical room sizes. For huge histories, future optimizations could include snapshotting, chunked layers, or server-provided bitmaps.
-
-### Server-side validation
-
-The backend validates operation payloads before broadcasting/storing:
-
-- Allowed types (`brush` / `eraser`)
-- Valid `id`, `color`, and sane `width`
-- Finite numeric points (`x`, `y`)
-
-This protects shared state from malformed or malicious events.
-
----
-
-## Conflict Resolution
-
-### Overlapping drawing
-
-- Operations are applied in order; later strokes render on top of earlier strokes (“painter’s algorithm”).
-- Eraser strokes use `destination-out`, so they cut out pixels from what has already been drawn.
-
-### Simultaneous drawing + network latency
-
-- Multiple users can draw simultaneously.
-- Each user sees their own stroke immediately (local-first rendering).
-- Remote updates appear as messages arrive; finalized operations are appended to the server history.
-
-### Undo/redo conflicts
-
-Because undo/redo is per-user, users do not directly undo other users’ actions.  
-When undo/redo happens, the server broadcasts `canvas:state` and clients redraw from the authoritative operation history.
-
----
-
-## Summary
-
-- The backend is the authoritative operation log per room.
-- The frontend draws locally for responsiveness and stays consistent by replaying server history.
-- Live previews (`stroke:update`) make remote drawing feel real-time.
-- History replay keeps all clients synchronized after undo/redo and user joins.
-" 
+The server maintains an authoritative operation log for each room.
+The client prioritizes responsiveness by drawing locally while staying in sync through server state replays.
+Live previews make collaboration feel real-time, and full history replays guarantee consistency after joins, undo/redo actions, or clears.
