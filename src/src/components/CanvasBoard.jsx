@@ -4,7 +4,6 @@ import React, {
   useEffect,
   useRef,
   useCallback,
-  useState,
   useMemo,
   forwardRef,
   useImperativeHandle
@@ -17,16 +16,28 @@ const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || "http://localhost:5000";
 const CanvasBoard = forwardRef(
   ({ roomId, userName, currentTool, currentColor, strokeWidth, onPlayersUpdate }, ref) => {
     const canvasRef = useRef(null);
+    const wrapperRef = useRef(null);
     const socketRef = useRef(null);
 
-    const [ctx, setCtx] = useState(null);
-    const [isDrawing, setIsDrawing] = useState(false);
-    const [currentPoints, setCurrentPoints] = useState([]);
-    const [currentStrokeId, setCurrentStrokeId] = useState(null);
-    const [players, setPlayers] = useState([]);
+    // Canvas and rendering state are held in refs to avoid re-rendering at pointer frequency.
+    const ctxRef = useRef(null);
+    const isDrawingRef = useRef(false);
+    const currentStrokeIdRef = useRef(null);
+    const currentPointsRef = useRef([]);
+
+    // Authoritative committed operations (from server) + live previews (in-progress strokes).
+    const committedOpsRef = useRef([]);
+    const previewByStrokeIdRef = useRef(new Map()); // strokeId -> operation
+
+    const playersRef = useRef([]);
+    const [, forceUiUpdate] = React.useReducer((x) => x + 1, 0);
 
     const CANVAS_WIDTH = 1000;
     const CANVAS_HEIGHT = 600;
+
+    const rafIdRef = useRef(null);
+    const lastCursorSentAtRef = useRef(0);
+    const lastStrokeUpdateSentAtRef = useRef(0);
 
     const eraserCursor = useMemo(() => {
       const size = Math.max(strokeWidth * 2, 16);
@@ -55,6 +66,30 @@ const CanvasBoard = forwardRef(
       context.restore();
     }, []);
 
+    // Simple path smoothing: quadratic curves between midpoints.
+    // This improves visual smoothness without a heavy algorithm.
+    function strokePath(context, points) {
+      if (!points || points.length < 2) return;
+
+      context.beginPath();
+      context.moveTo(points[0].x, points[0].y);
+
+      if (points.length === 2) {
+        context.lineTo(points[1].x, points[1].y);
+        return;
+      }
+
+      for (let i = 1; i < points.length - 1; i++) {
+        const curr = points[i];
+        const next = points[i + 1];
+        const midX = (curr.x + next.x) / 2;
+        const midY = (curr.y + next.y) / 2;
+        context.quadraticCurveTo(curr.x, curr.y, midX, midY);
+      }
+      const last = points[points.length - 1];
+      context.lineTo(last.x, last.y);
+    }
+
     const drawOperation = useCallback((context, op) => {
       if (!context || !op?.points || op.points.length < 2) return;
 
@@ -71,12 +106,27 @@ const CanvasBoard = forwardRef(
         context.strokeStyle = op.color || "#000000";
       }
 
-      context.beginPath();
-      context.moveTo(op.points[0].x, op.points[0].y);
-      for (let i = 1; i < op.points.length; i++) context.lineTo(op.points[i].x, op.points[i].y);
+      strokePath(context, op.points);
       context.stroke();
       context.restore();
     }, []);
+
+    const scheduleRender = useCallback(() => {
+      if (rafIdRef.current != null) return;
+      rafIdRef.current = requestAnimationFrame(() => {
+        rafIdRef.current = null;
+        const context = ctxRef.current;
+        if (!context) return;
+
+        clearCanvas(context);
+
+        // 1) Draw committed operations (authoritative)
+        for (const op of committedOpsRef.current) drawOperation(context, op);
+
+        // 2) Draw all in-progress previews last
+        for (const op of previewByStrokeIdRef.current.values()) drawOperation(context, op);
+      });
+    }, [clearCanvas, drawOperation]);
 
     // Expose undo/redo/clearMine to parent
     useImperativeHandle(ref, () => ({
@@ -101,7 +151,7 @@ const CanvasBoard = forwardRef(
       const context = canvas.getContext("2d");
       context.lineCap = "round";
       context.lineJoin = "round";
-      setCtx(context);
+      ctxRef.current = context;
 
       clearCanvas(context);
     }, [clearCanvas]);
@@ -110,47 +160,53 @@ const CanvasBoard = forwardRef(
       socketRef.current = io(SOCKET_URL);
 
       socketRef.current.on("room:players", ({ players: serverPlayers }) => {
-        setPlayers(serverPlayers || []);
-        if (typeof onPlayersUpdate === "function") onPlayersUpdate(serverPlayers || []);
+        playersRef.current = serverPlayers || [];
+        if (typeof onPlayersUpdate === "function") onPlayersUpdate(playersRef.current);
+        forceUiUpdate();
       });
 
       socketRef.current.on("cursor:update", ({ userId, cursor }) => {
-        setPlayers((prev) => {
-          const next = prev.map((p) => (p.id === userId ? { ...p, cursor } : p));
-          if (typeof onPlayersUpdate === "function") onPlayersUpdate(next);
-          return next;
-        });
+        playersRef.current = (playersRef.current || []).map((p) =>
+          p.id === userId ? { ...p, cursor } : p
+        );
+        if (typeof onPlayersUpdate === "function") onPlayersUpdate(playersRef.current);
+        forceUiUpdate();
       });
 
       socketRef.current.on("canvas:state", ({ operations }) => {
-        if (!ctx) return;
-        clearCanvas(ctx);
-        (operations || []).forEach((op) => drawOperation(ctx, op));
+        committedOpsRef.current = operations || [];
+        previewByStrokeIdRef.current = new Map();
+        scheduleRender();
       });
 
       socketRef.current.on("stroke:update", ({ operation }) => {
-        if (!ctx) return;
-        drawOperation(ctx, operation);
+        if (!operation?.id) return;
+        // Store preview (so we don't permanently draw it and then draw again on finalize)
+        previewByStrokeIdRef.current.set(operation.id, operation);
+        scheduleRender();
       });
 
       socketRef.current.on("stroke:created", ({ operation }) => {
-        if (!ctx) return;
-        drawOperation(ctx, operation);
+        if (!operation?.id) return;
+        // Remove preview and commit operation to the authoritative layer
+        previewByStrokeIdRef.current.delete(operation.id);
+        committedOpsRef.current = [...committedOpsRef.current, operation];
+        scheduleRender();
       });
 
       return () => {
         socketRef.current?.disconnect();
       };
-    }, [ctx, clearCanvas, drawOperation, onPlayersUpdate]);
+    }, [drawOperation, onPlayersUpdate, scheduleRender]);
 
     useEffect(() => {
       if (!socketRef.current) return;
       if (!roomId) return;
 
-      if (ctx) clearCanvas(ctx);
+      scheduleRender();
 
       socketRef.current.emit("room:join", { roomId, userName });
-    }, [roomId, userName, ctx, clearCanvas]);
+    }, [roomId, userName, scheduleRender]);
 
     const getMousePos = useCallback((e) => {
       const rect = canvasRef.current.getBoundingClientRect();
@@ -162,79 +218,111 @@ const CanvasBoard = forwardRef(
 
     const startDrawing = useCallback(
       (e) => {
+        const ctx = ctxRef.current;
         if (!ctx) return;
         if (!roomId || roomId === "lobby") return;
 
-        setIsDrawing(true);
         const pos = getMousePos(e);
         const strokeId = uuidv4();
-        setCurrentStrokeId(strokeId);
-        setCurrentPoints([pos]);
+        isDrawingRef.current = true;
+        currentStrokeIdRef.current = strokeId;
+        currentPointsRef.current = [pos];
 
-        if (currentTool === "brush") {
-          ctx.strokeStyle = currentColor;
-          ctx.lineWidth = strokeWidth;
-          ctx.globalCompositeOperation = "source-over";
-        } else {
-          ctx.strokeStyle = "#ffffff";
-          ctx.lineWidth = strokeWidth;
-          ctx.globalCompositeOperation = "destination-out";
-        }
-
-        ctx.beginPath();
-        ctx.moveTo(pos.x, pos.y);
+        // Put local stroke into the preview map immediately so rendering is unified.
+        previewByStrokeIdRef.current.set(strokeId, {
+          id: strokeId,
+          type: currentTool,
+          color: currentColor,
+          width: strokeWidth,
+          points: [pos]
+        });
+        scheduleRender();
       },
-      [ctx, roomId, getMousePos, currentTool, currentColor, strokeWidth]
+      [roomId, getMousePos, currentTool, currentColor, strokeWidth, scheduleRender]
     );
 
     const draw = useCallback(
       (e) => {
-        if (!isDrawing || !ctx || currentPoints.length === 0) return;
+        const ctx = ctxRef.current;
+        if (!ctx) return;
+        if (!isDrawingRef.current) return;
+        if (!currentStrokeIdRef.current) return;
 
         const pos = getMousePos(e);
-        const points = [...currentPoints, pos];
-        setCurrentPoints(points);
+        const points = currentPointsRef.current;
+        const last = points[points.length - 1];
 
-        ctx.lineTo(pos.x, pos.y);
-        ctx.stroke();
+        // Point filtering to reduce noise and event frequency (helps CPU + network).
+        // Threshold scales with stroke width to avoid "gaps" on thick strokes.
+        const minDist = Math.max(0.5, strokeWidth * 0.15);
+        const dx = pos.x - last.x;
+        const dy = pos.y - last.y;
+        if (dx * dx + dy * dy < minDist * minDist) return;
 
-        if (points.length % 3 === 0) {
+        const nextPoints = [...points, pos];
+        currentPointsRef.current = nextPoints;
+
+        // Update local preview and schedule a render on the next animation frame.
+        previewByStrokeIdRef.current.set(currentStrokeIdRef.current, {
+          id: currentStrokeIdRef.current,
+          type: currentTool,
+          color: currentColor,
+          width: strokeWidth,
+          points: nextPoints
+        });
+        scheduleRender();
+
+        const now = performance.now();
+
+        // Batch stroke updates (streaming strategy): send at most ~30fps.
+        if (now - lastStrokeUpdateSentAtRef.current > 33) {
+          lastStrokeUpdateSentAtRef.current = now;
           socketRef.current?.emit("stroke:update", {
-            id: currentStrokeId,
+            id: currentStrokeIdRef.current,
             type: currentTool,
             color: currentColor,
             width: strokeWidth,
-            points
+            points: nextPoints
           });
         }
 
-        socketRef.current?.emit("cursor:move", { x: pos.x, y: pos.y });
+        // Throttle cursor updates separately.
+        if (now - lastCursorSentAtRef.current > 50) {
+          lastCursorSentAtRef.current = now;
+          socketRef.current?.emit("cursor:move", { x: pos.x, y: pos.y });
+        }
       },
-      [isDrawing, ctx, currentPoints, currentStrokeId, currentTool, currentColor, strokeWidth, getMousePos]
+      [currentTool, currentColor, strokeWidth, getMousePos, scheduleRender]
     );
 
     const stopDrawing = useCallback(() => {
-      if (!isDrawing || currentPoints.length < 2) {
-        setIsDrawing(false);
-        setCurrentPoints([]);
-        setCurrentStrokeId(null);
+      const strokeId = currentStrokeIdRef.current;
+      const points = currentPointsRef.current;
+      if (!strokeId || points.length < 2) {
+        isDrawingRef.current = false;
+        currentPointsRef.current = [];
+        currentStrokeIdRef.current = null;
+        if (strokeId) previewByStrokeIdRef.current.delete(strokeId);
+        scheduleRender();
         return;
       }
 
-      setIsDrawing(false);
+      isDrawingRef.current = false;
 
       const operation = {
-        id: currentStrokeId,
+        id: strokeId,
         type: currentTool,
         color: currentColor,
         width: strokeWidth,
-        points: currentPoints
+        points
       };
 
       socketRef.current?.emit("stroke:end", operation);
-      setCurrentPoints([]);
-      setCurrentStrokeId(null);
-    }, [isDrawing, currentStrokeId, currentTool, currentColor, strokeWidth, currentPoints]);
+      // Keep preview until server confirms stroke:created (authoritative commit).
+      currentPointsRef.current = [];
+      currentStrokeIdRef.current = null;
+      scheduleRender();
+    }, [currentTool, currentColor, strokeWidth, scheduleRender]);
 
     useEffect(() => {
       const canvas = canvasRef.current;
@@ -253,8 +341,22 @@ const CanvasBoard = forwardRef(
       };
     }, [startDrawing, draw, stopDrawing]);
 
+    const toCssPos = useCallback((cursor) => {
+      const wrapper = wrapperRef.current;
+      if (!wrapper || !cursor) return null;
+      const rect = wrapper.getBoundingClientRect();
+      return {
+        left: (cursor.x / CANVAS_WIDTH) * rect.width,
+        top: (cursor.y / CANVAS_HEIGHT) * rect.height
+      };
+    }, []);
+
     return (
-      <div className="canvas-wrapper" style={{ position: "relative", width: "1000px", height: "600px" }}>
+      <div
+        ref={wrapperRef}
+        className="canvas-wrapper"
+        style={{ position: "relative", width: "1000px", height: "600px" }}
+      >
         <canvas
           ref={canvasRef}
           className="canvas-board"
@@ -267,24 +369,28 @@ const CanvasBoard = forwardRef(
         />
 
         <div className="cursor-overlay">
-          {players
+          {(playersRef.current || [])
             .filter((p) => p.id !== socketRef.current?.id)
             .filter((p) => p.cursor)
-            .map((p) => (
-              <div
-                key={p.id}
-                className="remote-cursor"
-                style={{
-                  left: `${p.cursor.x}px`,
-                  top: `${p.cursor.y}px`,
-                  background: p.color,
-                  color: "white"
-                }}
-                title={p.name}
-              >
-                {p.name.slice(0, 2).toUpperCase()}
-              </div>
-            ))}
+            .map((p) => {
+              const cssPos = toCssPos(p.cursor);
+              if (!cssPos) return null;
+              return (
+                <div
+                  key={p.id}
+                  className="remote-cursor"
+                  style={{
+                    left: `${cssPos.left}px`,
+                    top: `${cssPos.top}px`,
+                    background: p.color,
+                    color: "white"
+                  }}
+                  title={p.name}
+                >
+                  {p.name.slice(0, 2).toUpperCase()}
+                </div>
+              );
+            })}
         </div>
       </div>
     );

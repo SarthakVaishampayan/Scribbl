@@ -1,71 +1,45 @@
 // server/drawing-state.js
+//
+// Canvas state is represented as an ordered list of stroke operations.
+// For strict global undo/redo we treat this list as a timeline:
+// - undo() removes the most recent operation (regardless of author)
+// - redo() restores the most recently undone operation
 
-// Ensure per-user undo map exists
-function ensureUndoneMap(room) {
-  if (!room.undoneByUser) {
-    room.undoneByUser = new Map();
-  }
+function ensureRedoStack(room) {
+  if (!Array.isArray(room.redoStack)) room.redoStack = [];
 }
 
-// Add new operation and reset that user's redo stack
+// Add a new operation to the end of the timeline.
+// Global redo stack is cleared when any new operation is appended (standard editor behavior).
 function addOperation(room, operation) {
   room.operations.push(operation);
-  ensureUndoneMap(room);
-  const userId = operation.userId;
-  if (!room.undoneByUser.has(userId)) {
-    room.undoneByUser.set(userId, []);
-  }
-  // Clear that user's redo stack when they draw something new
-  room.undoneByUser.set(userId, []);
+  ensureRedoStack(room);
+  room.redoStack = [];
 }
 
-// Per-user undo: remove last operation by this user
-function undo(room, userId) {
+// Global undo: remove the latest operation (whoever drew it).
+function undo(room) {
   if (!room.operations.length) return null;
-  ensureUndoneMap(room);
+  ensureRedoStack(room);
 
-  // Find last operation authored by this user, starting from end
-  let idx = -1;
-  for (let i = room.operations.length - 1; i >= 0; i--) {
-    if (room.operations[i].userId === userId) {
-      idx = i;
-      break;
-    }
-  }
-  if (idx === -1) return null;
-
-  const [op] = room.operations.splice(idx, 1);
-
-  if (!room.undoneByUser.has(userId)) {
-    room.undoneByUser.set(userId, []);
-  }
-  const stack = room.undoneByUser.get(userId);
-  stack.push(op);
-  room.undoneByUser.set(userId, stack);
-
+  const op = room.operations.pop();
+  room.redoStack.push(op);
   return op;
 }
 
-// Per-user redo: restore last undone op of this user
-function redo(room, userId) {
-  ensureUndoneMap(room);
-  const stack = room.undoneByUser.get(userId);
-  if (!stack || !stack.length) return null;
+// Global redo: restore the most recently undone operation.
+function redo(room) {
+  ensureRedoStack(room);
+  if (!room.redoStack.length) return null;
 
-  const op = stack.pop();
+  const op = room.redoStack.pop();
   room.operations.push(op);
   return op;
 }
 
-// Global clear (unused by "clear mine", but kept for completeness)
 function clear(room) {
   room.operations = [];
-  room.undoneByUser = new Map();
+  room.redoStack = [];
 }
 
-module.exports = {
-  addOperation,
-  undo,
-  redo,
-  clear
-};
+module.exports = { addOperation, undo, redo, clear };

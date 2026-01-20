@@ -158,31 +158,29 @@ io.on("connection", (socket) => {
     io.to(roomId).emit("stroke:created", { roomId, operation: opToStore });
   });
 
-  // Per-user undo: remove last op created by this user
+  // Global undo: remove the most recent operation in the room (regardless of author).
   socket.on("canvas:undo", () => {
     const roomId = socket.data.roomId;
-    const userId = socket.id;
     if (!roomId || roomId === "lobby") return;
 
     const room = getRoom(roomId);
     if (!room) return;
 
-    const undoneOp = undo(room, userId);
+    const undoneOp = undo(room);
     if (undoneOp) {
       io.to(roomId).emit("canvas:state", { roomId, operations: room.operations });
     }
   });
 
-  // Per-user redo: restore last undone op of this user
+  // Global redo: restore the most recently undone operation in the room.
   socket.on("canvas:redo", () => {
     const roomId = socket.data.roomId;
-    const userId = socket.id;
     if (!roomId || roomId === "lobby") return;
 
     const room = getRoom(roomId);
     if (!room) return;
 
-    const redoneOp = redo(room, userId);
+    const redoneOp = redo(room);
     if (redoneOp) {
       io.to(roomId).emit("canvas:state", { roomId, operations: room.operations });
     }
@@ -201,8 +199,11 @@ io.on("connection", (socket) => {
       (op) => !(op.userId === userId && op.type === "brush")
     );
 
-    if (room.undoneByUser && room.undoneByUser.has(userId)) {
-      room.undoneByUser.set(userId, []);
+    // Keep global redo stack consistent too.
+    if (Array.isArray(room.redoStack) && room.redoStack.length) {
+      room.redoStack = room.redoStack.filter(
+        (op) => !(op.userId === userId && op.type === "brush")
+      );
     }
 
     io.to(roomId).emit("canvas:state", { roomId, operations: room.operations });

@@ -23,6 +23,30 @@ The key abstraction is a **stroke operation**: one continuous brush or eraser st
 
 ---
 
+## Data Flow Diagram (end-to-end)
+
+```text
+Pointer events (client)
+  └─ mousedown/mousemove/mouseup
+      ├─ local preview update (requestAnimationFrame render)
+      ├─ emit stroke:update (throttled ~30fps)
+      ├─ emit cursor:move (throttled)
+      └─ emit stroke:end (final operation)
+
+Socket.io (server: authoritative room timeline)
+  ├─ stroke:update  ──► broadcast preview to other clients (not stored)
+  ├─ stroke:end     ──► validate + append to room.operations + clear redo stack
+  ├─ canvas:undo    ──► pop last op from room.operations -> push to room.redoStack
+  └─ canvas:redo    ──► pop from room.redoStack -> push back to room.operations
+
+Clients (sync)
+  ├─ stroke:update  ──► store preview by strokeId -> rAF redraw
+  ├─ stroke:created ──► move from preview -> committed ops -> rAF redraw
+  └─ canvas:state   ──► replace committed ops -> clear previews -> rAF redraw
+```
+
+---
+
 ## Data Flow
 
 ### 1. Joining a room
@@ -80,8 +104,9 @@ io.to(roomId).emit("room:players", { roomId, players: getPlayers(roomId) });
 
 2. On `mousemove` while drawing:
    - Adds new points to the current stroke.
-   - Extends the path (`lineTo`) and renders immediately (`stroke`) for “instant feedback”.
-   - Every few points (currently every 3 points), emits a live preview update:
+   - Filters points that are too close together (reduces jitter + event spam).
+   - Updates local preview state and renders on the next animation frame (`requestAnimationFrame`).
+   - Emits a live preview update (throttled, ~30fps):
 
 ```js
 socket.emit("stroke:update", {
@@ -226,40 +251,33 @@ Each room maintains:
 - `operations: Operation[]`  
   The authoritative history of completed strokes.
 
-- `undoneByUser: Map<userId, Operation[]>`  
-  Per-user undo stacks to support redo.
+- `redoStack: Operation[]`  
+  A **global** redo stack for the room (operations removed from the end of `operations`).
 
-### Undo (per-user)
+### Undo (global)
 
 When a client emits `canvas:undo`:
 
-1. Scan `room.operations` from the end to find the most recent operation authored by that user (`op.userId === userId`).
-2. Remove it from `room.operations`.
-3. Push it into that user’s `undoneByUser` stack.
-4. Broadcast a full `canvas:state` to all clients so everyone redraws from the same history.
+1. Pop the most recent operation from `room.operations` (regardless of author).
+2. Push it onto `room.redoStack`.
+3. Broadcast a full `canvas:state` to all clients so everyone redraws from the same authoritative timeline.
 
-### Redo (per-user)
+### Redo (global)
 
 When a client emits `canvas:redo`:
 
-1. Pop the last entry from the user’s `undoneByUser` stack.
+1. Pop the most recent entry from `room.redoStack`.
 2. Push it back into `room.operations`.
 3. Broadcast `canvas:state` to resync.
 
 ### Clear mine
 
-`canvas:clearMine` filters `room.operations` to remove only that user’s brush strokes (keeps eraser operations), clears that user’s redo stack, then broadcasts `canvas:state`.
+`canvas:clearMine` filters `room.operations` to remove only that user’s brush strokes (keeps eraser operations), and also filters `room.redoStack` to keep the redo stack consistent. Then it broadcasts `canvas:state`.
 
-### Why per-user undo/redo (instead of global)?
+### Conflict policy for global undo/redo
 
-The assignment mentions a global undo/redo timeline where “undo” affects the last global operation, even if another user created it.  
-This project currently uses **per-user undo/redo** because:
-
-- It avoids one user unexpectedly removing another user’s work.
-- It keeps the mental model simple: “Undo undoes what I just did.”
-- It still demonstrates operation-history synchronization and consistent redraw across clients.
-
-If you want strict global undo/redo, the room can maintain a single global undo stack and apply policies for simultaneous undo requests.
+- Undo/redo is **global** by design: if User A hits undo, they may undo User B’s last stroke if that was the latest operation.
+- Consistency is maintained by the server broadcasting `canvas:state` after every undo/redo, so every client rebuilds the canvas from the same operation list.
 
 ---
 
@@ -267,17 +285,25 @@ If you want strict global undo/redo, the room can maintain a single global undo 
 
 ### Batching stroke points
 
-Mouse move events can fire very frequently. The client batches points and sends `stroke:update` every few points (currently every 3).  
-Trade-off:
+Mouse move events can fire very frequently. The client:
+
+- Filters points that are too close together (distance threshold scales with stroke width)
+- Sends `stroke:update` at most ~30fps (throttled)
+- Sends `cursor:move` at most ~20fps (throttled)
+
+Trade-offs:
 
 - Fewer network messages and lower bandwidth usage
 - Slightly reduced remote granularity, still visually smooth
 
 ### Canvas rendering approach
 
-- Each client draws locally first for responsiveness.
+- Each client renders at most once per animation frame (`requestAnimationFrame`) to avoid over-drawing on high-frequency events.
 - The server stores only completed strokes (`stroke:end`) as the source of truth.
-- On `canvas:state`, clients clear and replay the entire operation list in order.
+- Clients keep two conceptual layers:
+  - **Committed layer**: `room.operations` (authoritative)
+  - **Preview layer**: in-progress strokes (by `strokeId`) that should not permanently mutate the committed layer
+- On `canvas:state`, clients clear and replay the entire committed operation list in order, then paint previews on top.
 
 This is simple and reliable for typical room sizes. For huge histories, future optimizations could include snapshotting, chunked layers, or server-provided bitmaps.
 

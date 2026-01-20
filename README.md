@@ -17,27 +17,16 @@ Multiple users can draw together in the same room, see each others’ cursors, a
 From the project root:
 
 ```bash
-# Install root dev tools (concurrently, nodemon)
+# Installs root dev tools AND (via postinstall) installs ./src and ./server deps
 npm install
-
-# Install client dependencies
-cd src
-npm install
-
-# Install server dependencies
-cd ../server
-npm install
-
-# Go back to root
-cd ..
 ```
 
-### Run the app (dev)
+### Run the app
 
 From the project root:
 
 ```bash
-npm run dev
+npm start
 ```
 
 This will:
@@ -131,11 +120,11 @@ As you draw:
 
 The canvas component exposes controls (wired via `useImperativeHandle`) for:
 
-- **Undo**: removes *your* last stroke in the current room
-- **Redo**: restores your last undone stroke
+- **Undo**: removes the **most recent stroke in the room** (global timeline)
+- **Redo**: restores the most recently undone stroke (global timeline)
 - **Clear Mine**: removes all your brush strokes in the room (eraser strokes are retained)
 
-Note: undo/redo are **per-user**, not global (explained in `ARCHITECTURE.md`).
+Note: **Undo/redo are global** and affect the shared room timeline (explained in `ARCHITECTURE.md`).
 
 ---
 

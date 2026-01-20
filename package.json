@@ -3,9 +3,11 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
+    "postinstall": "npm install --prefix src && npm install --prefix server",
     "server": "nodemon server/server.js",
     "client": "npm run dev --prefix src",
-    "dev": "concurrently \"npm run server\" \"npm run client\""
+    "dev": "concurrently \"npm run server\" \"npm run client\"",
+    "start": "npm run dev"
   },
   "devDependencies": {
     "concurrently": "^8.2.0",
