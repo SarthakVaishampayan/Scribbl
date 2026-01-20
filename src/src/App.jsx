@@ -33,9 +33,9 @@ function App() {
     <div className="app">
       <header className="header">
         <div className="brand">
-          <span className="brand-mark">CC</span>
+          <span className="brand-mark">S</span>
           <div className="brand-text">
-            <h1>Collaborative Canvas</h1>
+            <h1>Scribbl- A Collaborative Canvas</h1>
             <p>Draw together in real time.</p>
           </div>
         </div>
