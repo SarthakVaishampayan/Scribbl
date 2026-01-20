@@ -38,6 +38,7 @@ const CanvasBoard = forwardRef(
     const rafIdRef = useRef(null);
     const lastCursorSentAtRef = useRef(0);
     const lastStrokeUpdateSentAtRef = useRef(0);
+    const [connectionStatus, setConnectionStatus] = React.useState("connecting"); // connecting | connected | disconnected
 
     const eraserCursor = useMemo(() => {
       const size = Math.max(strokeWidth * 2, 16);
@@ -157,7 +158,12 @@ const CanvasBoard = forwardRef(
     }, [clearCanvas]);
 
     useEffect(() => {
-      socketRef.current = io(SOCKET_URL);
+      // Socket lifecycle + basic error handling (no app behavior changes; UI-only status).
+      socketRef.current = io(SOCKET_URL, { transports: ["websocket", "polling"] });
+
+      socketRef.current.on("connect", () => setConnectionStatus("connected"));
+      socketRef.current.on("disconnect", () => setConnectionStatus("disconnected"));
+      socketRef.current.on("connect_error", () => setConnectionStatus("disconnected"));
 
       socketRef.current.on("room:players", ({ players: serverPlayers }) => {
         playersRef.current = serverPlayers || [];
@@ -357,6 +363,25 @@ const CanvasBoard = forwardRef(
         className="canvas-wrapper"
         style={{ position: "relative", width: "1000px", height: "600px" }}
       >
+        {connectionStatus !== "connected" && (
+          <div
+            style={{
+              position: "absolute",
+              left: 12,
+              top: 12,
+              zIndex: 20,
+              padding: "8px 10px",
+              borderRadius: 10,
+              background: "rgba(0,0,0,0.65)",
+              color: "white",
+              fontSize: 12,
+              backdropFilter: "blur(10px)",
+              border: "1px solid rgba(255,255,255,0.18)"
+            }}
+          >
+            {connectionStatus === "connecting" ? "Connecting…" : "Disconnected. Reconnecting…"}
+          </div>
+        )}
         <canvas
           ref={canvasRef}
           className="canvas-board"

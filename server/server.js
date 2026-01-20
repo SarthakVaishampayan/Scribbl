@@ -42,6 +42,8 @@ function safeName(name) {
 }
 
 function validateOperation(op) {
+  // Defensive validation: never trust the network.
+  // If a client sends malformed data, we drop it rather than corrupt shared room state.
   if (!op || typeof op !== "object") return false;
   if (op.type !== "brush" && op.type !== "eraser") return false;
   if (typeof op.id !== "string" || !op.id) return false;

@@ -32,56 +32,62 @@ function App() {
   return (
     <div className="app">
       <header className="header">
-        <h1>🎨 Scribll </h1>
+        <div className="brand">
+          <span className="brand-mark">CC</span>
+          <div className="brand-text">
+            <h1>Collaborative Canvas</h1>
+            <p>Draw together in real time.</p>
+          </div>
+        </div>
+        {screen === "canvas" && (
+          <div className="header-room-meta">
+            <span className="badge">Room: {activeRoom}</span>
+            <span className="badge subtle">You: {userName || "Anon"}</span>
+          </div>
+        )}
       </header>
 
       {screen === "lobby" ? (
-        <div style={{ padding: 24, maxWidth: 520, margin: "0 auto" }}>
-          <h2 style={{ marginBottom: 12 }}>Lobby</h2>
+        <div className="lobby">
+          <div className="lobby-card">
+            <h2 className="lobby-title">Join a collaborative room</h2>
+            <p className="lobby-subtitle">
+              Choose a name and a room ID, then share the same room ID with your teammates to
+              sketch together.
+            </p>
 
-          <label style={{ display: "block", marginBottom: 8 }}>
-            Name
-            <input
-              style={{ width: "100%", padding: 10, marginTop: 6 }}
-              value={userName}
-              onChange={(e) => setUserName(e.target.value)}
-              placeholder="Your name"
-            />
-          </label>
+            <label className="field">
+              <span className="field-label">Name</span>
+              <input
+                className="field-input"
+                value={userName}
+                onChange={(e) => setUserName(e.target.value)}
+                placeholder="e.g. Aman"
+              />
+            </label>
 
-          <label style={{ display: "block", marginBottom: 8 }}>
-            Room ID
-            <input
-              style={{ width: "100%", padding: 10, marginTop: 6 }}
-              value={roomId}
-              onChange={(e) => setRoomId(e.target.value)}
-              placeholder="e.g. team-123"
-            />
-          </label>
+            <label className="field">
+              <span className="field-label">Room ID</span>
+              <input
+                className="field-input"
+                value={roomId}
+                onChange={(e) => setRoomId(e.target.value)}
+                placeholder="e.g. design-sprint-01"
+              />
+            </label>
 
-          <button
-            style={{
-              width: "100%",
-              padding: 12,
-              marginTop: 10,
-              borderRadius: 6,
-              border: "none",
-              background: "#007bff",
-              color: "white",
-              fontSize: 16,
-              cursor: "pointer"
-            }}
-            onClick={() => {
-              setScreen("canvas");
-              setActiveRoom(roomId.trim() || "room-1");
-            }}
-          >
-            Join Room
-          </button>
+            <button
+              className="primary-button"
+              onClick={() => {
+                setScreen("canvas");
+                setActiveRoom(roomId.trim() || "room-1");
+              }}
+            >
+              Enter Canvas
+            </button>
 
-          <p style={{ marginTop: 12, color: "#555" }}>
-            No password required. Just share the same Room ID.
-          </p>
+            <p className="lobby-hint">No password. Anyone with the same room ID can join.</p>
+          </div>
         </div>
       ) : (
         <div className="main-container">

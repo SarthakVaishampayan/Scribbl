@@ -14,6 +14,8 @@ function ensureRedoStack(room) {
 function addOperation(room, operation) {
   room.operations.push(operation);
   ensureRedoStack(room);
+  // Any new draw invalidates redo history, otherwise redo could re-apply
+  // operations that are no longer "after" the current timeline head.
   room.redoStack = [];
 }
 
